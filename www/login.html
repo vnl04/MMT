@@ -1,8 +1,74 @@
-<html><body>
-<h1>Login</h1>
-<form method="POST" action="/login">
-  Username: <input name="username" type="text"><br>
-  Password: <input name="password" type="password"><br>
-  <input type="submit" value="Login">
-</form>
-</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Login - bksysnet@hcmut</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <style>
+    form { display: flex; flex-direction: column; gap: 10px; max-width: 300px; }
+    input[type=text], input[type=password] {
+      padding: 6px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;
+    }
+    button {
+      padding: 8px; background: #38488f; color: white;
+      border: none; border-radius: 4px; cursor: pointer; font-size: 14px;
+    }
+    button:hover { background: #2c3670; }
+    #msg { margin-top: 10px; font-weight: bold; }
+    .ok  { color: green; }
+    .err { color: red; }
+  </style>
+</head>
+<body>
+<div>
+  <h1>Login</h1>
+  <label>Username: <input id="username" type="text" autocomplete="username"></label>
+  <label>Password: <input id="password" type="password" autocomplete="current-password"></label>
+  <button onclick="doLogin()">Login</button>
+  <p id="msg"></p>
+</div>
+
+<script>
+  async function doLogin() {
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value.trim();
+    const msgEl = document.getElementById("msg");
+
+    if (!username || !password) {
+      msgEl.textContent = "Please fill in both fields.";
+      msgEl.className = "err";
+      return;
+    }
+
+    try {
+      const resp = await fetch("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+
+      const result = await resp.json();
+
+      if (result.status === "ok") {
+        // Store session token for later requests
+        sessionStorage.setItem("token", result.token);
+        sessionStorage.setItem("username", result.username);
+        msgEl.textContent = result.message + " (" + result.username + ")";
+        msgEl.className = "ok";
+      } else {
+        msgEl.textContent = result.message || "Login failed.";
+        msgEl.className = "err";
+      }
+    } catch (err) {
+      msgEl.textContent = "Request failed: " + err.message;
+      msgEl.className = "err";
+    }
+  }
+
+  // Allow pressing Enter to submit
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") doLogin();
+  });
+</script>
+</body>
+</html>

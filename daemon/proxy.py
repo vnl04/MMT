@@ -11,6 +11,7 @@ daemon.proxy
 ~~~~~~~~~~~~~~~~~
 
 Simple reverse proxy server. Routes requests by Host header to configured backends.
+Supports round-robin load balancing across multiple backend servers.
 """
 
 import socket
@@ -18,6 +19,10 @@ import threading
 from .response import Response
 from .httpadapter import HttpAdapter
 from .dictionary import CaseInsensitiveDict
+
+# Round-robin counters per hostname: {hostname: current_index}
+_rr_counters = {}
+_rr_lock = threading.Lock()
 
 
 def forward_request(host, port, request):
@@ -47,9 +52,23 @@ def forward_request(host, port, request):
         backend.close()
 
 
+def _pick_round_robin(hostname, proxy_list):
+    """
+    Pick next backend from proxy_list using round-robin.
+    Thread-safe via _rr_lock.
+    """
+    with _rr_lock:
+        idx = _rr_counters.get(hostname, 0)
+        chosen = proxy_list[idx % len(proxy_list)]
+        _rr_counters[hostname] = (idx + 1) % len(proxy_list)
+    print("[Proxy] round-robin index={} selected {}".format(idx, chosen))
+    return chosen
+
+
 def resolve_routing_policy(hostname, routes):
     """
     Look up hostname in routes dict and return (proxy_host, proxy_port).
+    Applies the configured dist_policy (round-robin, etc.).
     Falls back to 127.0.0.1:9000 if nothing matches.
     """
     print("[Proxy] Resolving hostname: {}".format(hostname))
@@ -57,7 +76,7 @@ def resolve_routing_policy(hostname, routes):
     entry = routes.get(hostname)
     if not entry:
         print("[Proxy] No route for {}; using default".format(hostname))
-        return '127.0.0.1', '9000'
+        return '127.0.0.1', 9000
 
     proxy_map, policy = entry
     print("[Proxy] proxy_map={} policy={}".format(proxy_map, policy))
@@ -65,19 +84,21 @@ def resolve_routing_policy(hostname, routes):
     if isinstance(proxy_map, list):
         if len(proxy_map) == 0:
             print("[Proxy] Empty proxy_map for {}".format(hostname))
-            return '127.0.0.1', '9000'
+            return '127.0.0.1', 9000
         elif len(proxy_map) == 1:
-            proxy_host, proxy_port = proxy_map[0].split(':', 1)
-            return proxy_host, proxy_port
+            target = proxy_map[0]
         else:
-            # Round-robin: just pick first for now (can add counter later)
-            # For a real round-robin you'd keep a shared index per hostname
-            proxy_host, proxy_port = proxy_map[0].split(':', 1)
-            print("[Proxy] round-robin selected {}:{}".format(proxy_host, proxy_port))
-            return proxy_host, proxy_port
+            # Apply round-robin policy
+            if policy == 'round-robin':
+                target = _pick_round_robin(hostname, proxy_map)
+            else:
+                # default: just take first
+                target = proxy_map[0]
     else:
-        proxy_host, proxy_port = proxy_map.split(':', 1)
-        return proxy_host, proxy_port
+        target = proxy_map
+
+    proxy_host, proxy_port = target.split(':', 1)
+    return proxy_host, int(proxy_port)
 
 
 def handle_client(ip, port, conn, addr, routes):
@@ -103,13 +124,6 @@ def handle_client(ip, port, conn, addr, routes):
     print("[Proxy] {} at Host: {}".format(addr, hostname))
 
     resolved_host, resolved_port = resolve_routing_policy(hostname, routes)
-
-    try:
-        resolved_port = int(resolved_port)
-    except ValueError:
-        print("[Proxy] Invalid port value: {}".format(resolved_port))
-        conn.close()
-        return
 
     if resolved_host:
         print("[Proxy] Forwarding {} -> {}:{}".format(hostname, resolved_host, resolved_port))
