@@ -135,6 +135,9 @@ class Response():
             "Content-Length": "{}".format(len(self._content)),
             "Date": "{}".format(datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")),
             "Connection": "close",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }
 
         # Build first status line
@@ -164,23 +167,46 @@ class Response():
             "404 Not Found"
         ).encode('utf-8')
 
-    def build_json_response(self, content_bytes):
-        """Build a 200 OK response wrapping JSON content."""
+    def build_json_response(self, content_bytes, extra_headers=None):
+        """Build a 200 OK response wrapping JSON content.
+
+        :param content_bytes: Response body as bytes.
+        :param extra_headers: Optional dict of extra headers, e.g. {"Set-Cookie": "..."}.
+        """
         self.status_code = 200
         self.reason = "OK"
         self.headers['Content-Type'] = 'application/json'
         self._content = content_bytes
 
-        status_line = "HTTP/1.1 200 OK\r\n"
-        header_lines = (
+        base_headers = (
             "Content-Type: application/json\r\n"
             "Content-Length: {}\r\n"
             "Cache-Control: no-cache\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
             "Connection: close\r\n"
-            "\r\n"
         ).format(len(self._content))
 
-        return (status_line + header_lines).encode('utf-8') + self._content
+        extra = ""
+        if extra_headers:
+            for k, v in extra_headers.items():
+                extra += "{}: {}\r\n".format(k, v)
+
+        full_header = "HTTP/1.1 200 OK\r\n" + base_headers + extra + "\r\n"
+        return full_header.encode('utf-8') + self._content
+
+    def build_cors_preflight(self):
+        """Respond to OPTIONS preflight requests from browsers (CORS)."""
+        return (
+            "HTTP/1.1 204 No Content\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+            "Access-Control-Max-Age: 86400\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        ).encode('utf-8')
 
     def build_response(self, request, envelop_content=None):
         """Main method: build a complete HTTP response for the given request."""

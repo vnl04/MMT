@@ -55,6 +55,15 @@ class HttpAdapter:
         req.prepare(msg, routes)
         print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
 
+        # Handle CORS preflight (OPTIONS)
+        if req.method == "OPTIONS":
+            try:
+                conn.sendall(resp.build_cors_preflight())
+            except Exception:
+                pass
+            conn.close()
+            return
+
         response = b""
 
         if req.hook:
@@ -67,10 +76,19 @@ class HttpAdapter:
                 else:
                     result = req.hook(req.headers, req.body)
 
-                if isinstance(result, bytes):
-                    response = resp.build_json_response(result)
+                # Hook may return bytes OR (bytes, extra_headers_dict)
+                extra_headers = None
+                if isinstance(result, tuple) and len(result) == 2:
+                    content, extra_headers = result
                 else:
-                    response = resp.build_json_response(str(result).encode('utf-8'))
+                    content = result
+
+                if isinstance(content, bytes):
+                    response = resp.build_json_response(content, extra_headers)
+                else:
+                    response = resp.build_json_response(
+                        str(content).encode('utf-8'), extra_headers
+                    )
 
             except Exception as e:
                 print("[HttpAdapter] hook error: {}".format(e))
@@ -101,6 +119,13 @@ class HttpAdapter:
             writer.close()
             return
 
+        # Handle CORS preflight
+        if req.method == "OPTIONS":
+            writer.write(resp.build_cors_preflight())
+            await writer.drain()
+            writer.close()
+            return
+
         response = b""
 
         if req.hook:
@@ -110,10 +135,19 @@ class HttpAdapter:
                 else:
                     result = req.hook(req.headers, req.body)
 
-                if isinstance(result, bytes):
-                    response = resp.build_json_response(result)
+                # Hook may return bytes OR (bytes, extra_headers_dict)
+                extra_headers = None
+                if isinstance(result, tuple) and len(result) == 2:
+                    content, extra_headers = result
                 else:
-                    response = resp.build_json_response(str(result).encode('utf-8'))
+                    content = result
+
+                if isinstance(content, bytes):
+                    response = resp.build_json_response(content, extra_headers)
+                else:
+                    response = resp.build_json_response(
+                        str(content).encode('utf-8'), extra_headers
+                    )
             except Exception as e:
                 print("[HttpAdapter] async hook error: {}".format(e))
                 response = resp.build_notfound()

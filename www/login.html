@@ -2,73 +2,124 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Login - bksysnet@hcmut</title>
-  <link rel="stylesheet" href="css/styles.css" />
+  <title>Login - AsynapRous Chat</title>
   <style>
-    form { display: flex; flex-direction: column; gap: 10px; max-width: 300px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #313244;
+      padding: 36px 40px;
+      border-radius: 8px;
+      width: 340px;
+    }
+    h1 { font-size: 22px; margin-bottom: 6px; color: #cba6f7; }
+    p.sub { font-size: 12px; color: #a6adc8; margin-bottom: 24px; }
+    label { font-size: 13px; display: block; margin-bottom: 4px; color: #a6e3a1; }
     input[type=text], input[type=password] {
-      padding: 6px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;
+      width: 100%; padding: 9px 12px;
+      background: #1e1e2e; border: 1px solid #45475a;
+      border-radius: 4px; color: #cdd6f4; font-size: 14px;
+      margin-bottom: 16px;
     }
+    input:focus { outline: none; border-color: #cba6f7; }
     button {
-      padding: 8px; background: #38488f; color: white;
-      border: none; border-radius: 4px; cursor: pointer; font-size: 14px;
+      width: 100%; padding: 10px;
+      background: #cba6f7; color: #1e1e2e;
+      border: none; border-radius: 4px;
+      font-size: 15px; font-weight: bold;
+      cursor: pointer;
     }
-    button:hover { background: #2c3670; }
-    #msg { margin-top: 10px; font-weight: bold; }
-    .ok  { color: green; }
-    .err { color: red; }
+    button:hover { background: #b4befe; }
+    #msg {
+      margin-top: 14px; font-size: 13px;
+      text-align: center; min-height: 18px;
+    }
+    #msg.ok  { color: #a6e3a1; }
+    #msg.err { color: #f38ba8; }
+    .hint { margin-top: 20px; font-size: 12px; color: #6c7086; text-align: center; }
   </style>
 </head>
 <body>
-<div>
-  <h1>Login</h1>
-  <label>Username: <input id="username" type="text" autocomplete="username"></label>
-  <label>Password: <input id="password" type="password" autocomplete="current-password"></label>
-  <button onclick="doLogin()">Login</button>
+<div class="card">
+  <h1>AsynapRous Chat</h1>
+  <p class="sub">CO3093/CO3094 - Computer Networks</p>
+
+  <label>Username</label>
+  <input id="username" type="text" placeholder="alice / admin / student" autocomplete="username">
+
+  <label>Password</label>
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+
+  <button id="btn" onclick="doLogin()">Login</button>
+
   <p id="msg"></p>
+
+  <p class="hint">
+    Demo accounts: alice/alice123 &nbsp;|&nbsp; bob/bob123<br>
+    admin/admin123 &nbsp;|&nbsp; student/hcmut2026
+  </p>
 </div>
 
 <script>
+  // Allow Enter key to submit
+  document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
   async function doLogin() {
-    const username = document.getElementById("username").value.trim();
-    const password = document.getElementById("password").value.trim();
-    const msgEl = document.getElementById("msg");
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value.trim();
+    const msgEl    = document.getElementById('msg');
+    const btn      = document.getElementById('btn');
 
     if (!username || !password) {
-      msgEl.textContent = "Please fill in both fields.";
-      msgEl.className = "err";
+      msgEl.textContent = 'Please enter username and password.';
+      msgEl.className   = 'err';
       return;
     }
 
+    btn.disabled = true;
+    btn.textContent = 'Logging in...';
+    msgEl.textContent = '';
+
     try {
-      const resp = await fetch("/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const resp = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
 
       const result = await resp.json();
 
-      if (result.status === "ok") {
-        // Store session token for later requests
-        sessionStorage.setItem("token", result.token);
-        sessionStorage.setItem("username", result.username);
-        msgEl.textContent = result.message + " (" + result.username + ")";
-        msgEl.className = "ok";
+      if (result.status === 'ok') {
+        // Save token + username in sessionStorage for use in chat.html
+        sessionStorage.setItem('token',    result.token);
+        sessionStorage.setItem('username', result.username);
+
+        msgEl.textContent = 'Login successful! Redirecting...';
+        msgEl.className   = 'ok';
+
+        // Redirect to chat UI after 800 ms
+        setTimeout(() => { window.location.href = '/chat.html'; }, 800);
       } else {
-        msgEl.textContent = result.message || "Login failed.";
-        msgEl.className = "err";
+        msgEl.textContent = result.message || 'Login failed.';
+        msgEl.className   = 'err';
+        btn.disabled = false;
+        btn.textContent = 'Login';
       }
     } catch (err) {
-      msgEl.textContent = "Request failed: " + err.message;
-      msgEl.className = "err";
+      msgEl.textContent = 'Connection error: ' + err.message;
+      msgEl.className   = 'err';
+      btn.disabled = false;
+      btn.textContent = 'Login';
     }
   }
-
-  // Allow pressing Enter to submit
-  document.addEventListener("keydown", function(e) {
-    if (e.key === "Enter") doLogin();
-  });
 </script>
 </body>
 </html>
