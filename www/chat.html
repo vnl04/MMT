@@ -117,10 +117,16 @@
       color: #1e1e2e;
       font-size: 11px;
       font-weight: bold;
-      padding: 2px 8px;
+      padding: 3px 10px;
       border-radius: 10px;
       display: none;
       cursor: pointer;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%   { opacity: 1; }
+      50%  { opacity: 0.6; }
+      100% { opacity: 1; }
     }
 
     #messages {
@@ -252,8 +258,8 @@ const token    = sessionStorage.getItem('token')    || '';
 const username = sessionStorage.getItem('username') || 'guest';
 let selectedPeer  = null;
 let channel       = 'general';
-let lastMsgCount  = 0;
-let isAtBottom    = true;
+let lastSeq       = 0;
+let renderedCount = 0;
 
 document.getElementById('welcome-msg').textContent = 'Logged in as: ' + username;
 
@@ -278,6 +284,11 @@ function scrollToBottom() {
   const box = document.getElementById('messages');
   box.scrollTop = box.scrollHeight;
   document.getElementById('notification').style.display = 'none';
+}
+
+function isNearBottom() {
+  const box = document.getElementById('messages');
+  return box.scrollHeight - box.scrollTop - box.clientHeight < 60;
 }
 
 // ----------------------------------------------------------------
@@ -321,29 +332,26 @@ async function loadPeers() {
 }
 
 // ----------------------------------------------------------------
-// Messages — POST /messages  (polls every 3 s)
-// Bug fix: changed from GET (no body) to POST so the server can
-// read the channel from the JSON body reliably.
+// Messages — GET /messages?channel=<name>  (polls every 3 s)
+// Uses query string + server-side seq counter for more reliable polling.
 // ----------------------------------------------------------------
 async function loadMessages() {
   try {
-    const r = await fetch('/messages', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ channel })
+    const r = await fetch('/messages?channel=' + encodeURIComponent(channel), {
+      method: 'GET',
+      headers: authHeaders()
     });
     const d = await r.json();
     if (!d.messages) return;
 
     const box  = document.getElementById('messages');
     const msgs = d.messages;
+    const serverSeq = d.seq || 0;
 
-    if (msgs.length > lastMsgCount) {
-      if (!isAtBottom) {
-        document.getElementById('notification').style.display = 'inline';
-      }
+    if (msgs.length > renderedCount) {
+      const atBottom = isNearBottom();
 
-      for (let i = lastMsgCount; i < msgs.length; i++) {
+      for (let i = renderedCount; i < msgs.length; i++) {
         const m    = msgs[i];
         const row  = document.createElement('div');
         row.className = 'msg-row ' + (m.from === username ? 'self' : 'other');
@@ -361,8 +369,16 @@ async function loadMessages() {
         box.appendChild(row);
       }
 
-      lastMsgCount = msgs.length;
-      if (isAtBottom) scrollToBottom();
+      renderedCount = msgs.length;
+      if (serverSeq > lastSeq && !atBottom) {
+        const newCount = serverSeq - lastSeq;
+        const badge = document.getElementById('notification');
+        badge.textContent = '↓ ' + newCount + ' new message' + (newCount > 1 ? 's' : '');
+        badge.style.display = 'inline';
+      } else {
+        scrollToBottom();
+      }
+      lastSeq = serverSeq;
     }
   } catch (e) {
     // silent — polling failure is not fatal
@@ -371,8 +387,7 @@ async function loadMessages() {
 
 // Track scroll position
 document.getElementById('messages').addEventListener('scroll', function () {
-  isAtBottom = this.scrollHeight - this.scrollTop - this.clientHeight < 30;
-  if (isAtBottom) {
+  if (isNearBottom()) {
     document.getElementById('notification').style.display = 'none';
   }
 });

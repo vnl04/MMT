@@ -4,6 +4,8 @@
 
 Dự án: **HTTP server không chặn (non-blocking)**, **xác thực HTTP**, **chat lai** (REST + TCP P2P) trên framework **AsynapRous** (Python, chủ yếu thư viện chuẩn `socket`).
 
+**Báo cáo BTL1:** `report/BTL1_Bao_Cao_CO3093.md` (Markdown + sơ đồ Mermaid — xuất PNG tại [mermaid.live](https://mermaid.live) nếu nộp PDF/Word).
+
 ### Ghi chú phiên bản
 
 - Chuẩn hoá **`BASE_DIR`** trong `daemon/response.py` để **`www/`** và **`static/`** luôn resolve theo thư mục gốc repo (không phụ thuộc chỗ đứng khi chạy `python ...`).

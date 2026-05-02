@@ -16,6 +16,11 @@ object consumed by :class:`HttpAdapter` and route handlers.
 FIX (Bug 1): Route lookup normalises trailing slashes so ``/login`` and
 ``/login/`` resolve to the same handler. Query strings are stripped from the
 path before routing.
+
+FIX (Bug 2): The raw query string (everything after ``?``) is preserved
+in ``self.query_string`` and injected into the parsed headers as
+``X-Query-String`` so handlers such as ``GET /messages`` can still read
+``?channel=general`` even though routing strips the query component.
 """
 
 import base64
@@ -38,6 +43,7 @@ class Request:
         "auth",
         "routes",
         "hook",
+        "query_string",
     ]
 
     def __init__(self):
@@ -53,8 +59,10 @@ class Request:
         self._raw_body = None
         self.routes = {}
         self.hook = None
+        self.query_string = ""
 
     def extract_request_line(self, request):
+        """Parse request line and preserve raw query string."""
         try:
             lines = request.splitlines()
             first_line = lines[0]
@@ -63,7 +71,10 @@ class Request:
                 return None, None, None
             method, path, version = parts[0], parts[1], parts[2]
             if "?" in path:
-                path = path.split("?", 1)[0]
+                path, qs = path.split("?", 1)
+                self.query_string = qs
+            else:
+                self.query_string = ""
             if path == "/":
                 path = "/index.html"
         except Exception:
@@ -145,6 +156,9 @@ class Request:
         self._raw_headers, self._raw_body = self.fetch_headers_body(request)
         self.headers = self.prepare_headers(self._raw_headers)
         self.body = self._raw_body
+
+        if self.query_string:
+            self.headers["x-query-string"] = self.query_string
 
         cookie_str = self.headers.get("cookie", "")
         if cookie_str:

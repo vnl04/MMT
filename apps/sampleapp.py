@@ -108,10 +108,17 @@ CHANNELS = {"general": []}
 _channel_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
-# Message store  {channel_name: [{from, text, time, channel}, ...]}
+# Message store  {channel_name: [{from, text, time, channel, seq}, ...]}
 # ---------------------------------------------------------------------------
 MESSAGES = {"general": []}
 _msg_lock = threading.Lock()
+_msg_seq = 0
+
+# ---------------------------------------------------------------------------
+# Integrated P2P listeners {port: thread}
+# ---------------------------------------------------------------------------
+P2P_LISTENER_THREADS = {}
+_p2p_listener_lock = threading.Lock()
 
 
 # ===========================================================================
@@ -237,6 +244,82 @@ def _direct_send(peer_ip, peer_port, payload_str):
         return False, str(e)
 
 
+def _store_message(channel, entry):
+    """Append one message and stamp it with a monotonically increasing seq."""
+    global _msg_seq
+    with _msg_lock:
+        if channel not in MESSAGES:
+            MESSAGES[channel] = []
+        _msg_seq += 1
+        entry["seq"] = _msg_seq
+        MESSAGES[channel].append(entry)
+
+
+def _handle_p2p_connection(conn, addr):
+    """Handle one incoming direct P2P TCP connection."""
+    try:
+        conn.settimeout(10)
+        data = conn.recv(4096).decode("utf-8", errors="replace").strip()
+        if data and data != "PING":
+            try:
+                msg = json.loads(data)
+                sender = msg.get("from", "unknown")
+                text = msg.get("text", "")
+                channel = msg.get("channel", "general")
+                ts = msg.get("time", time.strftime("%H:%M:%S"))
+                entry = {"from": sender, "text": text, "time": ts, "channel": channel}
+                _store_message(channel, entry)
+                print("[P2PListener] Message from {} on {}: {}".format(sender, channel, text))
+            except json.JSONDecodeError:
+                print("[P2PListener] Non-JSON payload from {}: {}".format(addr, data))
+        conn.sendall(b"ACK\n")
+    except Exception as e:
+        print("[P2PListener] Error from {}: {}".format(addr, e))
+    finally:
+        conn.close()
+
+
+def _ensure_p2p_listener(peer_port):
+    """Start a background TCP listener for *peer_port* if not already running."""
+    if not peer_port:
+        return
+
+    with _p2p_listener_lock:
+        if peer_port in P2P_LISTENER_THREADS:
+            return
+
+        def _loop():
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                srv.bind(("0.0.0.0", peer_port))
+                srv.listen(20)
+                srv.settimeout(1.0)
+                print("[P2PListener] Listening on port {}".format(peer_port))
+                while True:
+                    try:
+                        conn, addr = srv.accept()
+                        t = threading.Thread(
+                            target=_handle_p2p_connection,
+                            args=(conn, addr),
+                            daemon=True,
+                        )
+                        t.start()
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        print("[P2PListener] accept error on {}: {}".format(peer_port, e))
+                        break
+            except Exception as e:
+                print("[P2PListener] Could not bind {}: {}".format(peer_port, e))
+            finally:
+                srv.close()
+
+        t = threading.Thread(target=_loop, daemon=True)
+        t.start()
+        P2P_LISTENER_THREADS[peer_port] = t
+
+
 # ===========================================================================
 # 2.2 — Authentication endpoints
 # ===========================================================================
@@ -355,11 +438,12 @@ def submit_info(headers="", body=""):
     print("[SampleApp] POST /submit-info")
     data = _parse_body(body)
 
-    username = data.get("username", "").strip()
-    if not username:
-        username = _get_username_from_session(headers) or ""
+    session_user = _get_username_from_session(headers)
+    username = session_user or data.get("username", "").strip()
     if not username:
         return json.dumps({"status": "error", "message": "Unauthorized"}).encode("utf-8")
+    if session_user and data.get("username", "").strip() and data.get("username", "").strip() != session_user:
+        return json.dumps({"status": "error", "message": "Username does not match session"}).encode("utf-8")
 
     peer_ip = data.get("ip", "127.0.0.1").strip()
     peer_port = data.get("port", 0)
@@ -369,6 +453,8 @@ def submit_info(headers="", body=""):
         return json.dumps({"status": "error", "message": "Invalid port"}).encode("utf-8")
 
     _remove_stale_peers()
+
+    _ensure_p2p_listener(peer_port)
 
     with _registry_lock:
         PEER_REGISTRY[username] = {
@@ -423,11 +509,14 @@ def add_list(headers="", body=""):
     print("[SampleApp] POST /add-list")
     data = _parse_body(body)
 
+    session_user = _get_username_from_session(headers)
     username = data.get("username", "").strip()
     channel = data.get("channel", "general").strip()
 
-    if not username:
-        username = _get_username_from_session(headers) or "anonymous"
+    if session_user:
+        username = session_user
+    elif not username:
+        username = "anonymous"
 
     with _channel_lock:
         if channel not in CHANNELS:
@@ -509,23 +598,23 @@ def send_peer(headers="", body=""):
     print("[SampleApp] POST /send-peer")
     data = _parse_body(body)
 
+    session_user = _get_username_from_session(headers)
     sender = data.get("from", "").strip()
     target = data.get("target", "").strip()
     message = data.get("message", "").strip()
     channel = data.get("channel", "general").strip()
 
-    if not sender:
-        sender = _get_username_from_session(headers) or "anonymous"
+    if session_user:
+        sender = session_user
+    elif not sender:
+        sender = "anonymous"
     if not target or not message:
         return json.dumps({"status": "error", "message": "Missing target or message"}).encode("utf-8")
 
     # Store message server-side regardless of P2P delivery success
     timestamp = time.strftime("%H:%M:%S")
     entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
-    with _msg_lock:
-        if channel not in MESSAGES:
-            MESSAGES[channel] = []
-        MESSAGES[channel].append(entry)
+    _store_message(channel, entry)
 
     _remove_stale_peers()
     with _registry_lock:
@@ -570,21 +659,21 @@ def broadcast_peer(headers="", body=""):
     print("[SampleApp] POST /broadcast-peer")
     data = _parse_body(body)
 
+    session_user = _get_username_from_session(headers)
     sender = data.get("from", "").strip()
     message = data.get("message", "").strip()
     channel = data.get("channel", "general").strip()
 
-    if not sender:
-        sender = _get_username_from_session(headers) or "anonymous"
+    if session_user:
+        sender = session_user
+    elif not sender:
+        sender = "anonymous"
     if not message:
         return json.dumps({"status": "error", "message": "Missing message"}).encode("utf-8")
 
     timestamp = time.strftime("%H:%M:%S")
     entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
-    with _msg_lock:
-        if channel not in MESSAGES:
-            MESSAGES[channel] = []
-        MESSAGES[channel].append(entry)
+    _store_message(channel, entry)
 
     _remove_stale_peers()
     with _registry_lock:
@@ -623,24 +712,33 @@ def broadcast_peer(headers="", body=""):
 def get_messages(headers="", body=""):
     """Return stored messages for a channel (polling endpoint).
 
-    Supports both GET and POST so the browser's ``fetch()`` works for both
-    cases.  The channel name is read from the JSON body; defaults to
-    ``"general"``.
+    Supports both GET and POST.
 
-    **Bug fix**: GET requests from browsers send no body, so the channel
-    must default gracefully to ``"general"`` rather than crashing.
+    Channel resolution priority:
+      1. JSON/form body ``{"channel": "general"}``
+      2. Query string ``?channel=general`` via internal ``x-query-string`` header
+      3. Fallback ``"general"``
 
     :param headers: Request headers.
     :param body: Optional JSON body ``{"channel": "general"}``.
     :returns: JSON ``{"status": "ok", "channel": ..., "messages": [...]}`` bytes.
     """
-    data = _parse_body(body) if body and body.strip() else {}
-    channel = data.get("channel", "general").strip() if data else "general"
+    channel = "general"
+    if body and body.strip():
+        data = _parse_body(body)
+        channel = data.get("channel", "general").strip() if data else "general"
+    elif headers and hasattr(headers, "get"):
+        qs = headers.get("x-query-string", "")
+        for pair in qs.split("&"):
+            if pair.startswith("channel="):
+                channel = pair.split("=", 1)[1].strip() or "general"
+                break
 
     with _msg_lock:
         msgs = list(MESSAGES.get(channel, []))
+        current_seq = _msg_seq
 
-    resp = {"status": "ok", "channel": channel, "messages": msgs}
+    resp = {"status": "ok", "channel": channel, "messages": msgs, "seq": current_seq}
     return json.dumps(resp).encode("utf-8")
 
 
@@ -655,9 +753,8 @@ def ping_peer(headers="", body=""):
     :returns: JSON ``{"status": "ok", "pong": true}`` bytes.
     """
     data = _parse_body(body)
-    username = data.get("username", "").strip()
-    if not username:
-        username = _get_username_from_session(headers) or ""
+    session_user = _get_username_from_session(headers)
+    username = session_user or data.get("username", "").strip()
 
     if username and username in PEER_REGISTRY:
         with _registry_lock:
@@ -670,11 +767,14 @@ def ping_peer(headers="", body=""):
 # Entry point
 # ===========================================================================
 
-def create_sampleapp(ip, port):
+def create_sampleapp(ip, port, p2p_port=0):
     """Configure and start the AsynapRous server.
 
     :param ip: IP address to bind, e.g. ``'0.0.0.0'``.
     :param port: Port to listen on, e.g. ``2026``.
+    :param p2p_port: Optional initial integrated P2P port.
     """
+    if p2p_port:
+        _ensure_p2p_listener(p2p_port)
     app.prepare_address(ip, port)
     app.run()
