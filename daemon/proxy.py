@@ -5,13 +5,25 @@
 #
 # AsynapRous release
 #
+# The authors hereby grant to Licensee personal permission to use
+# and modify the Licensed Source Code for the sole purpose of studying
+# while attending the course
+#
 
 """
 daemon.proxy
 ~~~~~~~~~~~~~~~~~
 
-Simple reverse proxy server. Routes requests by Host header to configured backends.
-Supports round-robin load balancing across multiple backend servers.
+Simple reverse proxy server.
+
+Routes incoming HTTP requests to backend services based on the ``Host``
+header and a configuration-driven routing table.  Supports:
+
+* Single-backend routing (direct ``proxy_pass``).
+* Round-robin load balancing across multiple backends.
+
+Non-blocking design: every accepted client connection is handled in its
+own daemon thread so the accept loop is never blocked.
 """
 
 import socket
@@ -25,12 +37,22 @@ _rr_counters = {}
 _rr_lock = threading.Lock()
 
 
+# ---------------------------------------------------------------------------
+# Backend forwarding
+# ---------------------------------------------------------------------------
+
 def forward_request(host, port, request):
-    """Connect to backend, send request, collect and return response bytes."""
+    """Open a TCP connection to *host*:*port*, send *request*, return the reply.
+
+    :param host: Backend IP/hostname string.
+    :param port: Backend port integer.
+    :param request: Raw HTTP request string to forward.
+    :returns: Raw HTTP response bytes from the backend.
+    """
     backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         backend.connect((host, port))
-        backend.sendall(request.encode('utf-8', errors='replace'))
+        backend.sendall(request.encode("utf-8", errors="replace"))
         response = b""
         while True:
             chunk = backend.recv(4096)
@@ -47,36 +69,51 @@ def forward_request(host, port, request):
             "Connection: close\r\n"
             "\r\n"
             "Bad Gateway"
-        ).encode('utf-8')
+        ).encode("utf-8")
     finally:
         backend.close()
 
 
+# ---------------------------------------------------------------------------
+# Load-balancing helpers
+# ---------------------------------------------------------------------------
+
 def _pick_round_robin(hostname, proxy_list):
-    """
-    Pick next backend from proxy_list using round-robin.
-    Thread-safe via _rr_lock.
+    """Thread-safe round-robin selection from *proxy_list*.
+
+    :param hostname: Hostname key used to track the counter.
+    :param proxy_list: List of ``'host:port'`` strings.
+    :returns: The selected ``'host:port'`` string.
     """
     with _rr_lock:
         idx = _rr_counters.get(hostname, 0)
         chosen = proxy_list[idx % len(proxy_list)]
         _rr_counters[hostname] = (idx + 1) % len(proxy_list)
-    print("[Proxy] round-robin index={} selected {}".format(idx, chosen))
+    print("[Proxy] round-robin idx={} selected {}".format(idx, chosen))
     return chosen
 
 
+# ---------------------------------------------------------------------------
+# Route resolution
+# ---------------------------------------------------------------------------
+
 def resolve_routing_policy(hostname, routes):
-    """
-    Look up hostname in routes dict and return (proxy_host, proxy_port).
-    Applies the configured dist_policy (round-robin, etc.).
-    Falls back to 127.0.0.1:9000 if nothing matches.
+    """Resolve the target backend ``(host, port)`` for *hostname*.
+
+    Applies the ``dist_policy`` configured for the host block.
+    Falls back to ``127.0.0.1:9000`` if no route matches.
+
+    :param hostname: Value of the ``Host`` request header.
+    :param routes: Routing table as returned by ``parse_virtual_hosts()``.
+        Format: ``{hostname: (proxy_map, policy)}``.
+    :returns: ``(proxy_host_str, proxy_port_int)`` tuple.
     """
     print("[Proxy] Resolving hostname: {}".format(hostname))
 
     entry = routes.get(hostname)
     if not entry:
-        print("[Proxy] No route for {}; using default".format(hostname))
-        return '127.0.0.1', 9000
+        print("[Proxy] No route for '{}'; using default 127.0.0.1:9000".format(hostname))
+        return "127.0.0.1", 9000
 
     proxy_map, policy = entry
     print("[Proxy] proxy_map={} policy={}".format(proxy_map, policy))
@@ -84,44 +121,56 @@ def resolve_routing_policy(hostname, routes):
     if isinstance(proxy_map, list):
         if len(proxy_map) == 0:
             print("[Proxy] Empty proxy_map for {}".format(hostname))
-            return '127.0.0.1', 9000
+            return "127.0.0.1", 9000
         elif len(proxy_map) == 1:
             target = proxy_map[0]
         else:
-            # Apply round-robin policy
-            if policy == 'round-robin':
+            # Apply distribution policy
+            if policy == "round-robin":
                 target = _pick_round_robin(hostname, proxy_map)
             else:
-                # default: just take first
+                # Default: first entry
                 target = proxy_map[0]
     else:
         target = proxy_map
 
-    proxy_host, proxy_port = target.split(':', 1)
-    return proxy_host, int(proxy_port)
+    proxy_host, proxy_port_str = target.split(":", 1)
+    return proxy_host, int(proxy_port_str)
 
+
+# ---------------------------------------------------------------------------
+# Per-connection handler
+# ---------------------------------------------------------------------------
 
 def handle_client(ip, port, conn, addr, routes):
-    """Read client request, resolve backend, forward, send reply back."""
+    """Handle one client connection: parse host, resolve backend, forward.
+
+    :param ip: Proxy server IP string.
+    :param port: Proxy server port integer.
+    :param conn: Accepted client socket.
+    :param addr: Client address tuple ``(ip, port)``.
+    :param routes: Routing table dict.
+    """
     try:
-        request = conn.recv(4096).decode('utf-8', errors='replace')
+        request = conn.recv(4096).decode("utf-8", errors="replace")
     except Exception as e:
         print("[Proxy] recv error: {}".format(e))
         conn.close()
         return
 
+    # Extract Host header
     hostname = None
     for line in request.splitlines():
-        if line.lower().startswith('host:'):
-            hostname = line.split(':', 1)[1].strip()
+        if line.lower().startswith("host:"):
+            hostname = line.split(":", 1)[1].strip()
             break
 
     if not hostname:
-        print("[Proxy] No Host header found, dropping connection")
+        print("[Proxy] No Host header from {}; dropping".format(addr))
         conn.close()
         return
 
-    print("[Proxy] {} at Host: {}".format(addr, hostname))
+    print("[Proxy] {} Host: {}".format(addr, hostname))
 
     resolved_host, resolved_port = resolve_routing_policy(hostname, routes)
 
@@ -136,7 +185,7 @@ def handle_client(ip, port, conn, addr, routes):
             "Connection: close\r\n"
             "\r\n"
             "404 Not Found"
-        ).encode('utf-8')
+        ).encode("utf-8")
 
     try:
         conn.sendall(response)
@@ -146,25 +195,40 @@ def handle_client(ip, port, conn, addr, routes):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Server loop
+# ---------------------------------------------------------------------------
+
 def run_proxy(ip, port, routes):
-    """Bind, listen, and spawn a thread per incoming connection."""
+    """Bind, listen, and spawn one daemon thread per incoming connection.
+
+    This implements **non-blocking multi-thread** handling at the proxy
+    layer: the accept loop never blocks on slow clients.
+
+    :param ip: IP address to bind.
+    :param port: Port to listen on.
+    :param routes: Routing table dict.
+    """
     proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     try:
         proxy.bind((ip, port))
         proxy.listen(50)
-        print("[Proxy] Listening on IP {} port {}".format(ip, port))
+        print("[Proxy] Listening on {}:{}".format(ip, port))
 
         while True:
             conn, addr = proxy.accept()
+            # Non-blocking: hand off to a daemon thread immediately
             t = threading.Thread(
                 target=handle_client,
                 args=(ip, port, conn, addr, routes),
-                daemon=True
+                daemon=True,
             )
             t.start()
 
+    except KeyboardInterrupt:
+        print("[Proxy] Shutting down.")
     except socket.error as e:
         print("[Proxy] Socket error: {}".format(e))
     finally:
@@ -172,5 +236,10 @@ def run_proxy(ip, port, routes):
 
 
 def create_proxy(ip, port, routes):
-    """Entry point for launching the proxy server."""
+    """Entry point for launching the proxy server.
+
+    :param ip: IP address to bind.
+    :param port: Port to listen on.
+    :param routes: Routing table as returned by ``parse_virtual_hosts()``.
+    """
     run_proxy(ip, port, routes)

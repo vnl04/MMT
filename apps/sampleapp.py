@@ -17,21 +17,40 @@ app.sampleapp
 ~~~~~~~~~~~~~~~~~
 
 Complete RESTful web application implementing Assignment 1 requirements:
-  - Section 2.2: HTTP Authentication with session tokens + Set-Cookie (RFC 6265)
-  - Section 2.3: Hybrid P2P Chat APIs (Client-Server + Peer-to-Peer paradigms)
 
-API Endpoints:
-  POST  /login          - Authenticate user, return session token + Set-Cookie
-  POST  /logout         - Invalidate session token
-  POST  /submit-info    - Peer registers its IP and port (tracker update)
-  GET   /get-list       - Peer discovery: get list of active peers
-  POST  /add-list       - Peer joins a channel
-  POST  /connect-peer   - Initiate direct TCP connection to another peer
-  POST  /send-peer      - Send message directly to a peer (P2P)
-  POST  /broadcast-peer - Broadcast message to all connected peers
+  Section 2.2 — Authentication (RFC 2617 / RFC 7235 / RFC 6265)
+    * Basic auth via ``Authorization: Basic <b64>`` header.
+    * Session token issued on login; stored in ``Set-Cookie: session=<token>``.
+    * Server challenges unauthenticated clients with ``WWW-Authenticate``.
+
+  Section 2.3 — Hybrid P2P Chat
+    Initialization phase (Client-Server):
+      POST /login          — authenticate, issue token + cookie
+      POST /logout         — invalidate session
+      POST /submit-info    — peer registers its listen IP:port
+      GET  /get-list       — discover active peers
+      POST /add-list       — join a channel
+
+    P2P chatting phase (Peer-to-Peer):
+      POST /connect-peer   — probe direct TCP connection to a peer
+      POST /send-peer      — send message directly via TCP to one peer
+      POST /broadcast-peer — broadcast message to all active peers
+
+    Utility:
+      GET  /messages       — poll stored messages for a channel
+      POST /messages       — same, body-based channel selection
+      POST /ping           — heartbeat to keep peer alive in registry
+
+API endpoints listed in assignment §2.3:
+  http://IP:port/login/
+  http://IP:port/submit-info/
+  http://IP:port/add-list/
+  http://IP:port/get-list/
+  http://IP:port/connect-peer/
+  http://IP:port/broadcast-peer/
+  http://IP:port/send-peer/
 """
 
-import sys
 import os
 import json
 import hashlib
@@ -44,11 +63,14 @@ from daemon import AsynapRous
 
 app = AsynapRous()
 
-# ------------------------------------------------------------------
-# User database: {username: hashed_password}
-# ------------------------------------------------------------------
-def _hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+# ---------------------------------------------------------------------------
+# User database   {username: sha256(password)}
+# ---------------------------------------------------------------------------
+
+def _hash_password(pw):
+    """Return hex SHA-256 digest of *pw*."""
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 
 USER_DB = {
     "admin":   _hash_password("admin123"),
@@ -58,85 +80,109 @@ USER_DB = {
     "guest":   _hash_password("guest"),
 }
 
-# ------------------------------------------------------------------
-# Session store: {token: username}      (RFC 6265 - Cookie sessions)
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Session store  {token: username}   (RFC 6265 cookie sessions)
+# ---------------------------------------------------------------------------
 SESSIONS = {}
 
-# ------------------------------------------------------------------
-# Peer registry: {username: {"ip": ..., "port": ..., "last_seen": ...}}
-# This replaces the standalone tracker for the Web-based P2P chat
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Peer registry  {username: {"ip": .., "port": .., "last_seen": ..}}
+# ---------------------------------------------------------------------------
 PEER_REGISTRY = {}
 _registry_lock = threading.Lock()
+PEER_TIMEOUT = 120          # seconds before peer is considered offline
 
-PEER_TIMEOUT = 120   # seconds before a peer is considered offline
-
-# ------------------------------------------------------------------
-# Channel store: {channel_name: [username, ...]}
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Channel store  {channel_name: [username, ...]}
+# ---------------------------------------------------------------------------
 CHANNELS = {"general": []}
 _channel_lock = threading.Lock()
 
-# ------------------------------------------------------------------
-# Message store: {channel_name: [{from, text, time}, ...]}
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Message store  {channel_name: [{from, text, time, channel}, ...]}
+# ---------------------------------------------------------------------------
 MESSAGES = {"general": []}
 _msg_lock = threading.Lock()
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
+# ===========================================================================
+# Internal helpers
+# ===========================================================================
 
 def _make_token(username):
-    """Generate a unique session token."""
+    """Generate a random, opaque session token for *username*."""
     raw = "{}:{}".format(username, os.urandom(8).hex())
     return base64.b64encode(raw.encode()).decode()
 
 
 def _parse_body(body):
-    """Try to parse body as JSON, fall back to url-encoded form."""
+    """Try JSON first, then fall back to URL-encoded form parsing.
+
+    :param body: Request body string.
+    :returns: ``dict`` of parsed key/value pairs.
+    """
     try:
         return json.loads(body)
     except (json.JSONDecodeError, TypeError):
         pass
     params = {}
     if body:
-        for pair in body.split('&'):
+        for pair in body.split("&"):
             pair = pair.strip()
-            if '=' in pair:
-                k, v = pair.split('=', 1)
+            if "=" in pair:
+                k, v = pair.split("=", 1)
                 params[k.strip()] = v.strip()
     return params
 
 
 def _get_username_from_session(headers):
-    """Extract username from Authorization or Cookie header."""
-    # Try Bearer token first
+    """Extract the authenticated username from request *headers*.
+
+    Checks, in order:
+      1. ``Authorization: Bearer <token>``
+      2. ``Cookie: session=<token>``
+      3. ``Authorization: Basic <b64(user:pass)>``  (RFC 2617)
+
+    :param headers: :class:`CaseInsensitiveDict` of request headers.
+    :returns: Username string, or ``None`` if unauthenticated.
+    """
+    if not headers:
+        return None
+
     auth = ""
-    if hasattr(headers, 'get'):
-        auth = headers.get("authorization", "") or headers.get("Authorization", "")
+    if hasattr(headers, "get"):
+        auth = headers.get("authorization", "")
+
+    # Bearer token
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
         return SESSIONS.get(token)
 
-    # Try Cookie: session=<token>
-    cookie_str = ""
-    if hasattr(headers, 'get'):
-        cookie_str = headers.get("cookie", "") or headers.get("Cookie", "")
+    # Cookie session
+    cookie_str = headers.get("cookie", "") if hasattr(headers, "get") else ""
     if cookie_str:
-        for pair in cookie_str.split(';'):
+        for pair in cookie_str.split(";"):
             pair = pair.strip()
             if pair.lower().startswith("session="):
-                token = pair.split('=', 1)[1].strip()
+                token = pair.split("=", 1)[1].strip()
                 return SESSIONS.get(token)
+
+    # HTTP Basic Auth (RFC 2617)
+    if auth.lower().startswith("basic "):
+        try:
+            decoded = base64.b64decode(auth[6:].strip()).decode("utf-8", errors="replace")
+            username, _, password = decoded.partition(":")
+            stored = USER_DB.get(username)
+            if stored and _hash_password(password) == stored:
+                return username
+        except Exception:
+            pass
 
     return None
 
 
 def _remove_stale_peers():
-    """Remove peers that haven't pinged recently."""
+    """Remove peers that have not sent a heartbeat within ``PEER_TIMEOUT``."""
     now = time.time()
     with _registry_lock:
         stale = [u for u, info in PEER_REGISTRY.items()
@@ -147,37 +193,46 @@ def _remove_stale_peers():
 
 
 def _direct_send(peer_ip, peer_port, payload_str):
-    """Open a short-lived TCP socket to send a message directly to a peer (P2P)."""
+    """Open a short-lived TCP socket and send *payload_str* directly to a peer.
+
+    Implements the **direct peer communication** requirement from §2.3.
+
+    :param peer_ip: Target IP string.
+    :param peer_port: Target port integer.
+    :param payload_str: JSON payload string to send.
+    :returns: ``(success_bool, reply_string)`` tuple.
+    """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)
         s.connect((peer_ip, int(peer_port)))
-        s.sendall((payload_str + "\n").encode('utf-8'))
-        reply = s.recv(256).decode('utf-8', errors='replace').strip()
+        s.sendall((payload_str + "\n").encode("utf-8"))
+        reply = s.recv(256).decode("utf-8", errors="replace").strip()
         s.close()
         return True, reply
     except Exception as e:
         return False, str(e)
 
 
-# ------------------------------------------------------------------
-# 2.2 — Authentication endpoints (RFC 2617 / RFC 6265)
-# ------------------------------------------------------------------
+# ===========================================================================
+# 2.2 — Authentication endpoints
+# ===========================================================================
 
-@app.route('/login', methods=['POST'])
+@app.route("/login", methods=["POST"])
 def login(headers="", body=""):
-    """
-    POST /login
-    Authenticate user with username + password.
+    """Authenticate a user and issue a session token.
 
-    Request body (JSON or form-encoded):
-        {"username": "alice", "password": "alice123"}
+    Accepts JSON body ``{"username": "alice", "password": "alice123"}``.
 
-    Returns:
-        {"status": "ok", "token": "...", "username": "..."}
-        + Set-Cookie: session=<token>; Path=/; HttpOnly
+    On success returns JSON ``{"status": "ok", "token": "...", "username": "..."}`
+    plus the response header ``Set-Cookie: session=<token>; Path=/; HttpOnly``
+    as required by RFC 6265.
+
+    :param headers: Request headers (CaseInsensitiveDict).
+    :param body: Raw request body string.
+    :returns: ``(json_bytes, extra_headers)`` tuple.
     """
-    print("[SampleApp] /login attempt")
+    print("[SampleApp] POST /login")
     data = _parse_body(body)
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
@@ -186,16 +241,19 @@ def login(headers="", body=""):
         resp = {"status": "error", "message": "Missing username or password"}
         return json.dumps(resp).encode("utf-8")
 
-    stored_hash = USER_DB.get(username)
-    if stored_hash is None or _hash_password(password) != stored_hash:
+    stored = USER_DB.get(username)
+    if stored is None or _hash_password(password) != stored:
         print("[SampleApp] Login failed for: {}".format(username))
         resp = {"status": "error", "message": "Invalid credentials"}
-        return json.dumps(resp).encode("utf-8")
+        # RFC 7235 §4.1 — include WWW-Authenticate to signal auth mechanism
+        return (
+            json.dumps(resp).encode("utf-8"),
+            {"WWW-Authenticate": 'Basic realm="AsynapRous"'},
+        )
 
-    # Valid credentials — issue session token
     token = _make_token(username)
     SESSIONS[token] = username
-    print("[SampleApp] Login OK for {}, token={}".format(username, token[:16] + "..."))
+    print("[SampleApp] Login OK for {}, token prefix={}".format(username, token[:16]))
 
     resp_data = {
         "status": "ok",
@@ -203,30 +261,32 @@ def login(headers="", body=""):
         "username": username,
         "token": token,
     }
-    # Return (body, extra_headers) tuple so httpadapter sets the cookie
+    # RFC 6265 §4.1 — Set-Cookie with HttpOnly flag
     cookie_str = "session={}; Path=/; HttpOnly".format(token)
     return (
         json.dumps(resp_data).encode("utf-8"),
-        {"Set-Cookie": cookie_str}
+        {"Set-Cookie": cookie_str},
     )
 
 
-@app.route('/logout', methods=['POST'])
+@app.route("/logout", methods=["POST"])
 def logout(headers="", body=""):
-    """
-    POST /logout
-    Invalidate session token.
+    """Invalidate the caller's session token.
 
-    Request body: {"token": "..."} OR relies on Cookie header.
+    Accepts ``{"token": "..."}`` in the body, or reads from the
+    ``Authorization`` / ``Cookie`` header.
+
+    :param headers: Request headers.
+    :param body: Raw request body string.
+    :returns: ``(json_bytes, extra_headers)`` — clears the session cookie.
     """
+    print("[SampleApp] POST /logout")
     data = _parse_body(body)
     token = data.get("token", "").strip()
 
-    # Also check headers
-    if not token:
-        auth = ""
-        if hasattr(headers, 'get'):
-            auth = headers.get("authorization", "")
+    # Fall back to Authorization header
+    if not token and hasattr(headers, "get"):
+        auth = headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
 
@@ -237,42 +297,40 @@ def logout(headers="", body=""):
     else:
         resp = {"status": "error", "message": "Invalid or expired token"}
 
+    # RFC 6265 — expire the cookie
     return (
         json.dumps(resp).encode("utf-8"),
-        {"Set-Cookie": "session=; Path=/; HttpOnly; Max-Age=0"}
+        {"Set-Cookie": "session=; Path=/; HttpOnly; Max-Age=0"},
     )
 
 
-# ------------------------------------------------------------------
-# 2.3 — Hybrid P2P Chat endpoints
-# ------------------------------------------------------------------
+# ===========================================================================
+# 2.3 — Hybrid P2P Chat: Initialization phase (Client-Server)
+# ===========================================================================
 
-@app.route('/submit-info', methods=['POST'])
+@app.route("/submit-info", methods=["POST"])
 def submit_info(headers="", body=""):
+    """Register this peer's listen address with the tracker.
+
+    **Initialization phase — Client-Server paradigm.**
+
+    Accepts ``{"username": "alice", "ip": "127.0.0.1", "port": 7001}``.
+
+    :param headers: Request headers (used for auth fallback).
+    :param body: Raw request body string.
+    :returns: JSON response bytes.
     """
-    POST /submit-info
-    Peer registers its listening IP and port with the tracker (this server).
-
-    Initialization phase — Client-Server paradigm.
-
-    Request body (JSON):
-        {"username": "alice", "ip": "127.0.0.1", "port": 7001, "token": "..."}
-
-    Returns:
-        {"status": "ok", "message": "Registered"}
-    """
-    print("[SampleApp] /submit-info")
+    print("[SampleApp] POST /submit-info")
     data = _parse_body(body)
 
-    # Auth check
-    username_from_session = _get_username_from_session(headers)
-    username = data.get("username", username_from_session or "").strip()
+    username = data.get("username", "").strip()
+    if not username:
+        username = _get_username_from_session(headers) or ""
     if not username:
         return json.dumps({"status": "error", "message": "Unauthorized"}).encode("utf-8")
 
-    peer_ip   = data.get("ip", "127.0.0.1").strip()
+    peer_ip = data.get("ip", "127.0.0.1").strip()
     peer_port = data.get("port", 0)
-
     try:
         peer_port = int(peer_port)
     except (ValueError, TypeError):
@@ -288,22 +346,24 @@ def submit_info(headers="", body=""):
         }
 
     print("[SampleApp] Registered peer {} at {}:{}".format(username, peer_ip, peer_port))
-    resp = {"status": "ok", "message": "Registered as {} at {}:{}".format(username, peer_ip, peer_port)}
+    resp = {
+        "status": "ok",
+        "message": "Registered {} at {}:{}".format(username, peer_ip, peer_port),
+    }
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/get-list', methods=['GET'])
+@app.route("/get-list", methods=["GET"])
 def get_list(headers="", body=""):
-    """
-    GET /get-list
-    Peer discovery — return list of all active peers.
+    """Return the list of currently active peers.
 
-    Initialization phase — Client-Server paradigm.
+    **Initialization phase — Client-Server paradigm (peer discovery).**
 
-    Returns:
-        {"status": "ok", "peers": [{"username": ..., "ip": ..., "port": ...}, ...]}
+    :param headers: Request headers.
+    :param body: Unused.
+    :returns: JSON ``{"status": "ok", "peers": [...]}`` bytes.
     """
-    print("[SampleApp] /get-list")
+    print("[SampleApp] GET /get-list")
     _remove_stale_peers()
 
     with _registry_lock:
@@ -316,23 +376,23 @@ def get_list(headers="", body=""):
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/add-list', methods=['POST'])
+@app.route("/add-list", methods=["POST"])
 def add_list(headers="", body=""):
-    """
-    POST /add-list
-    Peer joins a channel (channel management).
+    """Add a peer to a channel (channel management).
 
-    Request body (JSON):
-        {"username": "alice", "channel": "general"}
+    **Initialization phase — Client-Server paradigm.**
 
-    Returns:
-        {"status": "ok", "channel": "general", "members": [...]}
+    Accepts ``{"username": "alice", "channel": "general"}``.
+
+    :param headers: Request headers.
+    :param body: Raw request body string.
+    :returns: JSON ``{"status": "ok", "channel": ..., "members": [...]}`` bytes.
     """
-    print("[SampleApp] /add-list")
+    print("[SampleApp] POST /add-list")
     data = _parse_body(body)
 
     username = data.get("username", "").strip()
-    channel  = data.get("channel", "general").strip()
+    channel = data.get("channel", "general").strip()
 
     if not username:
         username = _get_username_from_session(headers) or "anonymous"
@@ -340,7 +400,8 @@ def add_list(headers="", body=""):
     with _channel_lock:
         if channel not in CHANNELS:
             CHANNELS[channel] = []
-            MESSAGES[channel] = []
+            with _msg_lock:
+                MESSAGES[channel] = []
         if username not in CHANNELS[channel]:
             CHANNELS[channel].append(username)
 
@@ -348,26 +409,28 @@ def add_list(headers="", body=""):
     resp = {
         "status": "ok",
         "channel": channel,
-        "members": CHANNELS.get(channel, [])
+        "members": list(CHANNELS.get(channel, [])),
     }
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/connect-peer', methods=['POST'])
+# ===========================================================================
+# 2.3 — Hybrid P2P Chat: P2P chatting phase
+# ===========================================================================
+
+@app.route("/connect-peer", methods=["POST"])
 def connect_peer(headers="", body=""):
+    """Probe a direct TCP connection to a peer (connection setup).
+
+    **P2P paradigm — connection setup phase.**
+
+    Accepts ``{"target": "bob"}``.
+
+    :param headers: Request headers.
+    :param body: Raw request body string.
+    :returns: JSON with peer address and probe result.
     """
-    POST /connect-peer
-    Initiate direct connection probe to a target peer (Peer-to-Peer setup).
-
-    Connection setup phase — P2P paradigm.
-
-    Request body (JSON):
-        {"target": "bob"}
-
-    Returns:
-        {"status": "ok"|"error", "target": ..., "ip": ..., "port": ...}
-    """
-    print("[SampleApp] /connect-peer")
+    print("[SampleApp] POST /connect-peer")
     data = _parse_body(body)
     target = data.get("target", "").strip()
 
@@ -382,14 +445,12 @@ def connect_peer(headers="", body=""):
     if not peer_info:
         return json.dumps({
             "status": "error",
-            "message": "Peer '{}' not found or offline".format(target)
+            "message": "Peer '{}' not found or offline".format(target),
         }).encode("utf-8")
 
-    # Probe connection
     ok, reply = _direct_send(peer_info["ip"], peer_info["port"], "PING")
-    status = "ok" if ok else "error"
     resp = {
-        "status": status,
+        "status": "ok" if ok else "error",
         "target": target,
         "ip": peer_info["ip"],
         "port": peer_info["port"],
@@ -398,40 +459,35 @@ def connect_peer(headers="", body=""):
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/send-peer', methods=['POST'])
+@app.route("/send-peer", methods=["POST"])
 def send_peer(headers="", body=""):
+    """Send a message directly to one peer via TCP (direct P2P communication).
+
+    **P2P paradigm — chatting phase.**
+
+    The backend opens a direct TCP connection to the target peer daemon;
+    the message is **not** routed through this server.
+
+    Accepts ``{"from": "alice", "target": "bob", "message": "Hi!", "channel": "general"}``.
+
+    :param headers: Request headers.
+    :param body: Raw request body string.
+    :returns: JSON delivery report bytes.
     """
-    POST /send-peer
-    Send a message directly to a specific peer over TCP (P2P direct communication).
-
-    Peer chatting phase — P2P paradigm.
-    Messages are NOT routed through this server; backend opens a direct TCP
-    connection to the target peer daemon.
-
-    Request body (JSON):
-        {"from": "alice", "target": "bob", "message": "Hello Bob!",
-         "channel": "general"}
-
-    Returns:
-        {"status": "ok"|"error", "delivered": true|false}
-    """
-    print("[SampleApp] /send-peer")
+    print("[SampleApp] POST /send-peer")
     data = _parse_body(body)
 
-    sender  = data.get("from", "").strip()
-    target  = data.get("target", "").strip()
+    sender = data.get("from", "").strip()
+    target = data.get("target", "").strip()
     message = data.get("message", "").strip()
     channel = data.get("channel", "general").strip()
 
     if not sender:
         sender = _get_username_from_session(headers) or "anonymous"
-
     if not target or not message:
-        return json.dumps({
-            "status": "error", "message": "Missing target or message"
-        }).encode("utf-8")
+        return json.dumps({"status": "error", "message": "Missing target or message"}).encode("utf-8")
 
-    # Store message locally regardless of delivery
+    # Store message server-side regardless of P2P delivery success
     timestamp = time.strftime("%H:%M:%S")
     entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
     with _msg_lock:
@@ -444,11 +500,10 @@ def send_peer(headers="", body=""):
         peer_info = PEER_REGISTRY.get(target)
 
     if not peer_info:
-        # Target not registered — store and return (message stored server-side)
         resp = {
             "status": "ok",
             "delivered": False,
-            "message": "Peer '{}' offline; message stored".format(target),
+            "message": "Peer '{}' offline; message stored server-side".format(target),
         }
         return json.dumps(resp).encode("utf-8")
 
@@ -466,34 +521,31 @@ def send_peer(headers="", body=""):
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/broadcast-peer', methods=['POST'])
+@app.route("/broadcast-peer", methods=["POST"])
 def broadcast_peer(headers="", body=""):
+    """Broadcast a message to ALL active peers (P2P broadcast connection).
+
+    **P2P paradigm — chatting phase.**
+
+    Each peer is contacted concurrently via a dedicated daemon thread.
+
+    Accepts ``{"from": "alice", "message": "Hello everyone!", "channel": "general"}``.
+
+    :param headers: Request headers.
+    :param body: Raw request body string.
+    :returns: JSON with per-peer delivery results.
     """
-    POST /broadcast-peer
-    Broadcast message to ALL active peers (P2P broadcast connection).
-
-    Peer chatting phase — P2P paradigm.
-
-    Request body (JSON):
-        {"from": "alice", "message": "Hello everyone!", "channel": "general"}
-
-    Returns:
-        {"status": "ok", "results": {peer: delivered_bool, ...}}
-    """
-    print("[SampleApp] /broadcast-peer")
+    print("[SampleApp] POST /broadcast-peer")
     data = _parse_body(body)
 
-    sender  = data.get("from", "").strip()
+    sender = data.get("from", "").strip()
     message = data.get("message", "").strip()
     channel = data.get("channel", "general").strip()
 
     if not sender:
         sender = _get_username_from_session(headers) or "anonymous"
-
     if not message:
-        return json.dumps({
-            "status": "error", "message": "Missing message"
-        }).encode("utf-8")
+        return json.dumps({"status": "error", "message": "Missing message"}).encode("utf-8")
 
     timestamp = time.strftime("%H:%M:%S")
     entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
@@ -515,13 +567,15 @@ def broadcast_peer(headers="", body=""):
             return
         ok, _ = _direct_send(info["ip"], info["port"], payload)
         results[uname] = ok
-        print("[SampleApp] Broadcast -> {} : {}".format(uname, "OK" if ok else "FAIL"))
+        print("[SampleApp] Broadcast -> {}: {}".format(uname, "OK" if ok else "FAIL"))
 
-    threads = []
-    for uname, info in peers_snapshot.items():
-        t = threading.Thread(target=_send_one, args=(uname, info), daemon=True)
+    # Concurrent broadcast — one thread per peer
+    threads = [
+        threading.Thread(target=_send_one, args=(u, info), daemon=True)
+        for u, info in peers_snapshot.items()
+    ]
+    for t in threads:
         t.start()
-        threads.append(t)
     for t in threads:
         t.join(timeout=6)
 
@@ -529,18 +583,28 @@ def broadcast_peer(headers="", body=""):
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/messages', methods=['GET'])
-def get_messages(headers="", body=""):
-    """
-    GET /messages
-    Retrieve stored messages for a channel (polling for new messages).
+# ===========================================================================
+# Utility endpoints
+# ===========================================================================
 
-    Query: channel name passed via body JSON {"channel": "general"}
-    Returns:
-        {"status": "ok", "messages": [...], "channel": "general"}
+@app.route("/messages", methods=["GET"])
+@app.route("/messages", methods=["POST"])
+def get_messages(headers="", body=""):
+    """Return stored messages for a channel (polling endpoint).
+
+    Supports both GET and POST so the browser's ``fetch()`` works for both
+    cases.  The channel name is read from the JSON body; defaults to
+    ``"general"``.
+
+    **Bug fix**: GET requests from browsers send no body, so the channel
+    must default gracefully to ``"general"`` rather than crashing.
+
+    :param headers: Request headers.
+    :param body: Optional JSON body ``{"channel": "general"}``.
+    :returns: JSON ``{"status": "ok", "channel": ..., "messages": [...]}`` bytes.
     """
-    data = _parse_body(body) if body else {}
-    channel = data.get("channel", "general").strip()
+    data = _parse_body(body) if body and body.strip() else {}
+    channel = data.get("channel", "general").strip() if data else "general"
 
     with _msg_lock:
         msgs = list(MESSAGES.get(channel, []))
@@ -549,14 +613,15 @@ def get_messages(headers="", body=""):
     return json.dumps(resp).encode("utf-8")
 
 
-@app.route('/ping', methods=['POST'])
+@app.route("/ping", methods=["POST"])
 def ping_peer(headers="", body=""):
-    """
-    POST /ping
-    Heartbeat — peer pings to stay alive in the registry.
+    """Heartbeat — refresh a peer's ``last_seen`` timestamp in the registry.
 
-    Request body: {"username": "alice"}
-    Returns: {"status": "ok", "pong": true}
+    Accepts ``{"username": "alice"}``.
+
+    :param headers: Request headers (auth fallback).
+    :param body: Raw request body string.
+    :returns: JSON ``{"status": "ok", "pong": true}`` bytes.
     """
     data = _parse_body(body)
     username = data.get("username", "").strip()
@@ -570,7 +635,15 @@ def ping_peer(headers="", body=""):
     return json.dumps({"status": "ok", "pong": True}).encode("utf-8")
 
 
+# ===========================================================================
+# Entry point
+# ===========================================================================
+
 def create_sampleapp(ip, port):
-    """Entry point: configure address and launch the AsynapRous server."""
+    """Configure and start the AsynapRous server.
+
+    :param ip: IP address to bind, e.g. ``'0.0.0.0'``.
+    :param port: Port to listen on, e.g. ``2026``.
+    """
     app.prepare_address(ip, port)
     app.run()

@@ -5,19 +5,36 @@
   <title>AsynapRous Chat</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; display: flex; flex-direction: column; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
 
     /* ---- TOP BAR ---- */
     #topbar {
-      background: #181825; padding: 10px 16px;
-      display: flex; align-items: center; justify-content: space-between;
+      background: #181825;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       border-bottom: 1px solid #313244;
+      flex-shrink: 0;
     }
     #topbar h2 { font-size: 16px; color: #cba6f7; }
     #topbar span { font-size: 13px; color: #a6adc8; }
     #topbar button {
-      padding: 5px 14px; background: #f38ba8; color: #1e1e2e;
-      border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold;
+      padding: 5px 14px;
+      background: #f38ba8;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: bold;
     }
 
     /* ---- MAIN LAYOUT ---- */
@@ -25,80 +42,144 @@
 
     /* ---- SIDEBAR ---- */
     #sidebar {
-      width: 220px; background: #181825;
+      width: 220px;
+      background: #181825;
       border-right: 1px solid #313244;
-      display: flex; flex-direction: column;
+      display: flex;
+      flex-direction: column;
       padding: 12px;
+      overflow-y: auto;
     }
-    #sidebar h3 { font-size: 13px; color: #a6adc8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
-    #peer-list { list-style: none; flex: 1; overflow-y: auto; }
+    #sidebar h3 {
+      font-size: 12px;
+      color: #a6adc8;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    #peer-list { list-style: none; }
     #peer-list li {
-      padding: 7px 10px; border-radius: 5px; font-size: 13px;
-      cursor: pointer; margin-bottom: 3px; color: #cdd6f4;
-      display: flex; align-items: center; gap: 6px;
+      padding: 7px 10px;
+      border-radius: 5px;
+      font-size: 13px;
+      cursor: pointer;
+      margin-bottom: 3px;
+      color: #cdd6f4;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
     #peer-list li:hover { background: #313244; }
     #peer-list li.active { background: #45475a; }
-    #peer-list li .dot { width: 8px; height: 8px; border-radius: 50%; background: #a6e3a1; }
-    #peer-list li .dot.self { background: #89b4fa; }
-    #sidebar .register-box { margin-top: 10px; }
-    #sidebar .register-box input {
-      width: 100%; padding: 6px 8px; font-size: 12px;
-      background: #1e1e2e; border: 1px solid #45475a;
-      border-radius: 4px; color: #cdd6f4; margin-bottom: 5px;
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #a6e3a1; flex-shrink: 0; }
+    .dot.self { background: #89b4fa; }
+
+    .register-box { margin-top: 14px; border-top: 1px solid #313244; padding-top: 12px; }
+    .register-box input {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      color: #cdd6f4;
+      margin-bottom: 5px;
     }
-    #sidebar .register-box button {
-      width: 100%; padding: 6px; font-size: 12px;
-      background: #89b4fa; color: #1e1e2e; border: none;
-      border-radius: 4px; cursor: pointer; font-weight: bold;
+    .register-box button {
+      width: 100%;
+      padding: 6px;
+      font-size: 12px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
     }
 
     /* ---- CHAT AREA ---- */
-    #chat-area { flex: 1; display: flex; flex-direction: column; }
+    #chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
     #channel-bar {
-      padding: 8px 16px; background: #181825;
+      padding: 8px 16px;
+      background: #181825;
       border-bottom: 1px solid #313244;
-      font-size: 13px; color: #89b4fa;
-      display: flex; align-items: center; gap: 8px;
+      font-size: 13px;
+      color: #89b4fa;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
     }
     #notification {
-      margin-left: auto; background: #f38ba8; color: #1e1e2e;
-      font-size: 11px; font-weight: bold;
-      padding: 2px 8px; border-radius: 10px;
+      margin-left: auto;
+      background: #f38ba8;
+      color: #1e1e2e;
+      font-size: 11px;
+      font-weight: bold;
+      padding: 2px 8px;
+      border-radius: 10px;
       display: none;
+      cursor: pointer;
     }
 
     #messages {
-      flex: 1; overflow-y: auto; padding: 16px;
-      display: flex; flex-direction: column; gap: 10px;
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     .msg-row { display: flex; flex-direction: column; max-width: 70%; }
     .msg-row.self { align-self: flex-end; align-items: flex-end; }
     .msg-row.other { align-self: flex-start; align-items: flex-start; }
     .msg-meta { font-size: 11px; color: #6c7086; margin-bottom: 3px; }
     .msg-bubble {
-      padding: 8px 14px; border-radius: 14px;
-      font-size: 14px; line-height: 1.4; word-break: break-word;
+      padding: 8px 14px;
+      border-radius: 14px;
+      font-size: 14px;
+      line-height: 1.4;
+      word-break: break-word;
     }
-    .msg-row.self .msg-bubble { background: #cba6f7; color: #1e1e2e; border-bottom-right-radius: 4px; }
-    .msg-row.other .msg-bubble { background: #313244; color: #cdd6f4; border-bottom-left-radius: 4px; }
+    .msg-row.self .msg-bubble {
+      background: #cba6f7;
+      color: #1e1e2e;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-row.other .msg-bubble {
+      background: #313244;
+      color: #cdd6f4;
+      border-bottom-left-radius: 4px;
+    }
 
     /* ---- INPUT BAR ---- */
     #input-bar {
-      padding: 10px 16px; background: #181825;
+      padding: 10px 16px;
+      background: #181825;
       border-top: 1px solid #313244;
-      display: flex; gap: 8px; align-items: center;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
     }
     #msg-input {
-      flex: 1; padding: 9px 14px; font-size: 14px;
-      background: #313244; border: 1px solid #45475a;
-      border-radius: 20px; color: #cdd6f4;
+      flex: 1;
+      padding: 9px 14px;
+      font-size: 14px;
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 20px;
+      color: #cdd6f4;
     }
     #msg-input:focus { outline: none; border-color: #cba6f7; }
     #input-bar button {
-      padding: 9px 18px; border: none; border-radius: 20px;
-      font-size: 13px; font-weight: bold; cursor: pointer;
+      padding: 9px 18px;
+      border: none;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
     }
     #btn-send { background: #cba6f7; color: #1e1e2e; }
     #btn-send:hover { background: #b4befe; }
@@ -106,8 +187,12 @@
     #btn-broadcast:hover { background: #74c7ec; }
 
     #status-bar {
-      padding: 4px 16px; font-size: 11px; color: #6c7086;
-      background: #181825; text-align: right;
+      padding: 4px 16px;
+      font-size: 11px;
+      color: #6c7086;
+      background: #181825;
+      text-align: right;
+      flex-shrink: 0;
     }
   </style>
 </head>
@@ -123,12 +208,14 @@
 <!-- MAIN -->
 <div id="main">
 
-  <!-- SIDEBAR: Peer list + Registration -->
+  <!-- SIDEBAR -->
   <div id="sidebar">
     <h3>Online Peers</h3>
-    <ul id="peer-list"><li style="color:#6c7086;font-size:12px">Loading...</li></ul>
+    <ul id="peer-list">
+      <li style="color:#6c7086;font-size:12px">Loading...</li>
+    </ul>
 
-    <div class="register-box" style="margin-top:14px;border-top:1px solid #313244;padding-top:12px;">
+    <div class="register-box">
       <h3 style="margin-bottom:8px">Register My Peer</h3>
       <input id="reg-port" type="number" placeholder="My listen port (e.g. 7001)" value="7001">
       <button onclick="doRegister()">Register</button>
@@ -139,18 +226,20 @@
   <div id="chat-area">
     <div id="channel-bar">
       <span># <span id="channel-label">general</span></span>
-      <span id="notification">New messages!</span>
+      <span id="notification" onclick="scrollToBottom()">New messages ↓</span>
     </div>
 
     <div id="messages"></div>
 
     <div id="input-bar">
-      <input id="msg-input" type="text" placeholder="Type a message... (Enter to send)" autocomplete="off">
+      <input id="msg-input" type="text"
+             placeholder="Type a message… (Enter to send, select peer first)"
+             autocomplete="off">
       <button id="btn-send" onclick="doSend()">Send</button>
       <button id="btn-broadcast" onclick="doBroadcast()">Broadcast All</button>
     </div>
 
-    <div id="status-bar" id="status">Ready</div>
+    <div id="status-bar">Ready</div>
   </div>
 
 </div>
@@ -161,16 +250,14 @@
 // ----------------------------------------------------------------
 const token    = sessionStorage.getItem('token')    || '';
 const username = sessionStorage.getItem('username') || 'guest';
-let selectedPeer = null;   // target for direct send
-let channel    = 'general';
-let lastMsgCount = 0;
-let isAtBottom = true;
+let selectedPeer  = null;
+let channel       = 'general';
+let lastMsgCount  = 0;
+let isAtBottom    = true;
 
 document.getElementById('welcome-msg').textContent = 'Logged in as: ' + username;
 
-// ----------------------------------------------------------------
-// Redirect to login if no token
-// ----------------------------------------------------------------
+// Redirect to login if no session
 if (!token) { window.location.href = '/login.html'; }
 
 // ----------------------------------------------------------------
@@ -187,8 +274,14 @@ function authHeaders() {
   };
 }
 
+function scrollToBottom() {
+  const box = document.getElementById('messages');
+  box.scrollTop = box.scrollHeight;
+  document.getElementById('notification').style.display = 'none';
+}
+
 // ----------------------------------------------------------------
-// Peer List (GET /get-list) — polling every 4 seconds
+// Peer List — GET /get-list  (polls every 4 s)
 // ----------------------------------------------------------------
 async function loadPeers() {
   try {
@@ -198,101 +291,104 @@ async function loadPeers() {
     ul.innerHTML = '';
 
     if (!d.peers || d.peers.length === 0) {
-      ul.innerHTML = '<li style="color:#6c7086;font-size:12px">No peers registered</li>';
+      ul.innerHTML = '<li style="color:#6c7086;font-size:12px">No peers online</li>';
       return;
     }
 
     d.peers.forEach(p => {
       const li = document.createElement('li');
       if (p.username === selectedPeer) li.classList.add('active');
-      const dot = document.createElement('span');
-      dot.className = p.username === username ? 'dot self' : 'dot';
+
+      const dot  = document.createElement('span');
+      dot.className = (p.username === username) ? 'dot self' : 'dot';
+
       const name = document.createElement('span');
       name.textContent = p.username + ' :' + p.port;
+
       li.appendChild(dot);
       li.appendChild(name);
       li.onclick = () => {
         selectedPeer = p.username;
         document.querySelectorAll('#peer-list li').forEach(l => l.classList.remove('active'));
         li.classList.add('active');
-        setStatus('Target: ' + p.username + ' (' + p.ip + ':' + p.port + ')');
+        setStatus('Target → ' + p.username + ' (' + p.ip + ':' + p.port + ')');
       };
       ul.appendChild(li);
     });
-  } catch(e) {
-    setStatus('Error loading peers: ' + e.message);
+  } catch (e) {
+    setStatus('Peer list error: ' + e.message);
   }
 }
 
 // ----------------------------------------------------------------
-// Message Display (GET /messages) — polling every 3 seconds
+// Messages — POST /messages  (polls every 3 s)
+// Bug fix: changed from GET (no body) to POST so the server can
+// read the channel from the JSON body reliably.
 // ----------------------------------------------------------------
 async function loadMessages() {
   try {
     const r = await fetch('/messages', {
-      method: 'GET',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' }
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ channel })
     });
-    // Server GET /messages reads channel from body — workaround: append query
     const d = await r.json();
     if (!d.messages) return;
 
-    const box = document.getElementById('messages');
+    const box  = document.getElementById('messages');
     const msgs = d.messages;
 
     if (msgs.length > lastMsgCount) {
-      // New messages arrived
-      const notif = document.getElementById('notification');
       if (!isAtBottom) {
-        notif.style.display = 'inline';
+        document.getElementById('notification').style.display = 'inline';
       }
 
-      // Render only new ones
       for (let i = lastMsgCount; i < msgs.length; i++) {
-        const m = msgs[i];
-        const row = document.createElement('div');
+        const m    = msgs[i];
+        const row  = document.createElement('div');
         row.className = 'msg-row ' + (m.from === username ? 'self' : 'other');
 
         const meta = document.createElement('div');
-        meta.className = 'msg-meta';
+        meta.className   = 'msg-meta';
         meta.textContent = (m.from === username ? 'You' : m.from) + '  ' + m.time;
 
         const bubble = document.createElement('div');
-        bubble.className = 'msg-bubble';
+        bubble.className   = 'msg-bubble';
         bubble.textContent = m.text;
 
         row.appendChild(meta);
         row.appendChild(bubble);
         box.appendChild(row);
       }
-      lastMsgCount = msgs.length;
 
-      if (isAtBottom) {
-        box.scrollTop = box.scrollHeight;
-      }
+      lastMsgCount = msgs.length;
+      if (isAtBottom) scrollToBottom();
     }
-  } catch(e) {
-    // silent fail
+  } catch (e) {
+    // silent — polling failure is not fatal
   }
 }
 
-// Detect if user is at the bottom of the chat
-document.getElementById('messages').addEventListener('scroll', function() {
-  const el = this;
-  isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+// Track scroll position
+document.getElementById('messages').addEventListener('scroll', function () {
+  isAtBottom = this.scrollHeight - this.scrollTop - this.clientHeight < 30;
   if (isAtBottom) {
     document.getElementById('notification').style.display = 'none';
   }
 });
 
 // ----------------------------------------------------------------
-// Register peer (POST /submit-info)
+// Register peer — POST /submit-info
 // ----------------------------------------------------------------
 async function doRegister() {
   const port = parseInt(document.getElementById('reg-port').value.trim());
-  if (!port) { setStatus('Enter a valid port.'); return; }
+  if (!port || port < 1 || port > 65535) {
+    setStatus('Enter a valid port number (1-65535).');
+    return;
+  }
 
-  // Detect local IP via simple connect trick — just send 127.0.0.1 for local demo
+  // For a local demo we advertise 127.0.0.1;
+  // in production the browser cannot reliably know its outbound IP.
   const ip = '127.0.0.1';
 
   try {
@@ -303,27 +399,29 @@ async function doRegister() {
     });
     const d = await r.json();
     setStatus(d.message || d.status);
-    loadPeers();
 
-    // Auto-join general channel
+    // Auto-join the general channel
     await fetch('/add-list', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ username, channel, token })
     });
-  } catch(e) {
+
+    loadPeers();
+  } catch (e) {
     setStatus('Register error: ' + e.message);
   }
 }
 
 // ----------------------------------------------------------------
-// Send message (POST /send-peer)
+// Send message — POST /send-peer  (P2P direct)
 // ----------------------------------------------------------------
 async function doSend() {
   const text = document.getElementById('msg-input').value.trim();
   if (!text) return;
+
   if (!selectedPeer) {
-    setStatus('Click a peer from the list to select a target, then send.');
+    setStatus('Click a peer in the list to select a target, then send.');
     return;
   }
 
@@ -336,16 +434,16 @@ async function doSend() {
       body: JSON.stringify({ from: username, target: selectedPeer, message: text, channel })
     });
     const d = await r.json();
-    const delivered = d.delivered ? 'delivered' : 'stored (peer offline)';
-    setStatus('Message ' + delivered + ' to ' + selectedPeer);
+    const label = d.delivered ? 'delivered directly ✓' : 'stored (peer offline)';
+    setStatus('Message ' + label + ' → ' + selectedPeer);
     loadMessages();
-  } catch(e) {
+  } catch (e) {
     setStatus('Send error: ' + e.message);
   }
 }
 
 // ----------------------------------------------------------------
-// Broadcast (POST /broadcast-peer)
+// Broadcast — POST /broadcast-peer  (P2P broadcast)
 // ----------------------------------------------------------------
 async function doBroadcast() {
   const text = document.getElementById('msg-input').value.trim();
@@ -361,15 +459,15 @@ async function doBroadcast() {
     });
     const d = await r.json();
     const count = Object.values(d.results || {}).filter(v => v).length;
-    setStatus('Broadcast sent. Delivered to ' + count + ' peer(s).');
+    setStatus('Broadcast sent — delivered to ' + count + ' peer(s).');
     loadMessages();
-  } catch(e) {
+  } catch (e) {
     setStatus('Broadcast error: ' + e.message);
   }
 }
 
 // ----------------------------------------------------------------
-// Logout (POST /logout)
+// Logout — POST /logout
 // ----------------------------------------------------------------
 async function doLogout() {
   try {
@@ -378,27 +476,27 @@ async function doLogout() {
       headers: authHeaders(),
       body: JSON.stringify({ token })
     });
-  } catch(e) {}
+  } catch (e) { /* ignore network errors on logout */ }
   sessionStorage.clear();
   window.location.href = '/login.html';
 }
 
 // ----------------------------------------------------------------
-// Enter key sends message
+// Enter key → send
 // ----------------------------------------------------------------
 document.getElementById('msg-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSend();
 });
 
 // ----------------------------------------------------------------
-// Start polling
+// Start polling loops
 // ----------------------------------------------------------------
 loadPeers();
 loadMessages();
 setInterval(loadPeers,    4000);
 setInterval(loadMessages, 3000);
 
-// Keep peer alive with heartbeat
+// Heartbeat — keep this peer alive in the server registry
 setInterval(async () => {
   try {
     await fetch('/ping', {
@@ -406,7 +504,7 @@ setInterval(async () => {
       headers: authHeaders(),
       body: JSON.stringify({ username })
     });
-  } catch(e) {}
+  } catch (e) { /* silent */ }
 }, 30000);
 </script>
 </body>
