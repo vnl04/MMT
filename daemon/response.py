@@ -29,7 +29,9 @@ import os
 import mimetypes
 from .dictionary import CaseInsensitiveDict
 
-BASE_DIR = ""
+# Project root (folder that contains daemon/, www/, apps/) — not cwd-relative.
+_PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = _PKG_ROOT if _PKG_ROOT.endswith(os.sep) else _PKG_ROOT + os.sep
 
 
 class Response:
@@ -265,41 +267,57 @@ class Response:
         ).encode("utf-8")
 
     def build_json_response(self, content_bytes, extra_headers=None):
-        """Build a ``200 OK`` JSON response.
+        """Build a JSON HTTP response (default ``200 OK``).
 
-        Supports optional extra headers such as ``Set-Cookie`` (RFC 6265).
+        Supports ``Set-Cookie`` (RFC 6265) and other extra headers.
+
+        Internal keys (stripped before sending; not forwarded to the client):
+          * ``__status`` — HTTP status code as string, e.g. ``\"401\"``
+          * ``__reason`` — reason phrase, e.g. ``\"Unauthorized\"``
 
         :param content_bytes: Response body as bytes.
-        :param extra_headers: Optional ``dict`` of additional headers,
-            e.g. ``{"Set-Cookie": "session=abc; Path=/; HttpOnly"}``.
+        :param extra_headers: Optional header dict merged into the response.
         :returns: Complete encoded HTTP response bytes.
         """
         if not isinstance(content_bytes, bytes):
             content_bytes = str(content_bytes).encode("utf-8")
 
-        self.status_code = 200
-        self.reason = "OK"
+        status_code = 200
+        reason_phrase = "OK"
+
+        hdrs = {}
+        if extra_headers:
+            hdrs = dict(extra_headers)
+
+        if "__status" in hdrs:
+            status_code = int(hdrs.pop("__status"))
+        if "__reason" in hdrs:
+            reason_phrase = hdrs.pop("__reason")
+
+        self.status_code = status_code
+        self.reason = reason_phrase
         self._content = content_bytes
 
         base = (
-            "HTTP/1.1 200 OK\r\n"
+            "HTTP/1.1 {code} {reason}\r\n"
             "Content-Type: application/json\r\n"
-            "Content-Length: {}\r\n"
-            "Date: {}\r\n"
+            "Content-Length: {clen}\r\n"
+            "Date: {date}\r\n"
             "Cache-Control: no-cache\r\n"
             "Connection: close\r\n"
             "Access-Control-Allow-Origin: *\r\n"
             "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
             "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
         ).format(
-            len(self._content),
-            datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
+            code=status_code,
+            reason=reason_phrase,
+            clen=len(self._content),
+            date=datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
         )
 
         extra = ""
-        if extra_headers:
-            for k, v in extra_headers.items():
-                extra += "{}: {}\r\n".format(k, v)
+        for k, v in hdrs.items():
+            extra += "{}: {}\r\n".format(k, v)
 
         return (base + extra + "\r\n").encode("utf-8") + self._content
 

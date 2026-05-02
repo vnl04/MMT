@@ -11,6 +11,12 @@ daemon.asynaprous
 ~~~~~~~~~~~~~~~~~
 
 Lightweight web app router for RESTful URL endpoints.
+
+FIX (Bug 3 / Bug 4): The ``route`` decorator previously returned a
+*wrapper* function instead of the original *func*.  That broke
+``inspect.iscoroutinefunction`` on handlers and made stacked ``@app.route``
+decorators confusing. The fixed decorator registers the original *func* in
+``self.routes`` and returns *func* unchanged.
 """
 
 from .backend import create_backend
@@ -30,26 +36,28 @@ class AsynapRous:
         self.ip = ip
         self.port = port
 
-    def route(self, path, methods=['GET']):
+    def route(self, path, methods=None):
+        """Register *func* as the handler for *path* and each method in *methods*.
+
+        Returns the original *func* unmodified (see module docstring).
+
+        :param path: URL path string, e.g. ``'/login'``.
+        :param methods: List of HTTP method strings (default ``['GET']``).
+        """
+        if methods is None:
+            methods = ['GET']
+
         def decorator(func):
             for method in methods:
-                self.routes[(method.upper(), path)] = func
+                key = (method.upper(), path)
+                self.routes[key] = func
+                print("[AsynapRous] registered route {} {}".format(method.upper(), path))
 
+            # Store lightweight metadata on the handler (optional, for logging)
             func._route_path = path
             func._route_methods = methods
 
-            def sync_wrapper(*args, **kwargs):
-                print("[AsynapRous] running sync function... [{}] {}".format(methods, path))
-                return func(*args, **kwargs)
-
-            async def async_wrapper(*args, **kwargs):
-                print("[AsynapRous] running Async function... [{}] {}".format(methods, path))
-                return await func(*args, **kwargs)
-
-            if inspect.iscoroutinefunction(func):
-                return async_wrapper
-            else:
-                return sync_wrapper
+            return func
 
         return decorator
 

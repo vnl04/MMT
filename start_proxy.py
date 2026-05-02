@@ -53,6 +53,9 @@ def parse_virtual_hosts(config_file):
 
     :config_file (str): Path to the NGINX config file.
     :rtype list of dict: Each dict contains 'listen'and 'server_name'.
+
+    ``proxy_pass`` lines are deduplicated (same order preserved) so the
+    round-robin list is not polluted by accidental duplicates.
     """
 
     with open(config_file, 'r') as f:
@@ -67,9 +70,16 @@ def parse_virtual_hosts(config_file):
     for host, block in host_blocks:
         proxy_map = {}
 
-        # Find all proxy_pass entries
+        # Find all proxy_pass entries (dedupe, preserve order)
         proxy_passes = re.findall(r'proxy_pass\s+http://([^\s;]+);', block)
-        map = proxy_map.get(host,[])
+        seen = set()
+        uniq = []
+        for entry in proxy_passes:
+            if entry not in seen:
+                seen.add(entry)
+                uniq.append(entry)
+        proxy_passes = uniq
+        map = proxy_map.get(host, [])
         map = map + proxy_passes
         proxy_map[host] = map
 

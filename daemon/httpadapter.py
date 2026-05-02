@@ -5,29 +5,22 @@
 #
 # AsynapRous release
 #
-# The authors hereby grant to Licensee personal permission to use
-# and modify the Licensed Source Code for the sole purpose of studying
-# while attending the course
-#
 
 """
 daemon.httpadapter
 ~~~~~~~~~~~~~~~~~
 
-HTTP adapter: reads a raw request, parses it, dispatches to route hooks
-(RESTful API handlers), builds the response, and sends it back.
+HTTP adapter: read request, dispatch route hooks, build response.
 
-Supports:
-  - Synchronous and async (coroutine) route hooks.
-  - CORS preflight (OPTIONS).
-  - RFC 7235 / RFC 2617 Basic Auth challenge via ``WWW-Authenticate``.
-  - RFC 6265 ``Set-Cookie`` forwarded from hook extra-headers.
-  - Hook returning ``(bytes, extra_headers_dict)`` or plain ``bytes``.
+FIX (Bug 7): ``handle_client_coroutine`` passes ``self.routes`` to
+``req.prepare()`` so asyncio mode resolves hooks correctly.
+
+FIX (Bug 2): ``handle_client(..., raw=...)`` allows the backend to inject
+already-read bytes (optional); default behaviour unchanged.
 """
 
 from .request import Request
 from .response import Response
-from .dictionary import CaseInsensitiveDict
 
 import asyncio
 import base64
@@ -35,14 +28,6 @@ import inspect
 
 
 class HttpAdapter:
-    """Manages a single client connection end-to-end.
-
-    :param ip: Server IP address string.
-    :param port: Server port integer.
-    :param conn: Active client socket.
-    :param connaddr: ``(ip, port)`` tuple of the remote client.
-    :param routes: Route mapping ``{(method, path): handler}``.
-    """
 
     __attrs__ = [
         "ip", "port", "conn", "connaddr", "routes", "request", "response",
@@ -57,26 +42,18 @@ class HttpAdapter:
         self.request = Request()
         self.response = Response()
 
-    # ------------------------------------------------------------------
-    # Synchronous handler
-    # ------------------------------------------------------------------
-
-    def handle_client(self, conn, addr, routes):
-        """Read request, dispatch to hook or static file, send response.
-
-        :param conn: Client socket.
-        :param addr: Client address tuple.
-        :param routes: Route mapping dict.
-        """
+    def handle_client(self, conn, addr, routes, raw=None):
         self.conn = conn
         self.connaddr = addr
 
         req = self.request
         resp = self.response
 
-        # Read raw request
         try:
-            msg = conn.recv(4096).decode("utf-8", errors="replace")
+            if raw is not None:
+                msg = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            else:
+                msg = conn.recv(4096).decode("utf-8", errors="replace")
         except Exception as e:
             print("[HttpAdapter] recv error: {}".format(e))
             conn.close()
@@ -85,7 +62,6 @@ class HttpAdapter:
         req.prepare(msg, routes)
         print("[HttpAdapter] handle_client from {}".format(addr))
 
-        # CORS preflight
         if req.method == "OPTIONS":
             try:
                 conn.sendall(resp.build_cors_preflight())
@@ -95,7 +71,6 @@ class HttpAdapter:
             return
 
         response = b""
-
         if req.hook:
             response = self._dispatch_hook(req, resp)
         else:
@@ -108,16 +83,7 @@ class HttpAdapter:
         finally:
             conn.close()
 
-    # ------------------------------------------------------------------
-    # Async (coroutine) handler
-    # ------------------------------------------------------------------
-
     async def handle_client_coroutine(self, reader, writer):
-        """Async version of handle_client using StreamReader / StreamWriter.
-
-        :param reader: asyncio StreamReader.
-        :param writer: asyncio StreamWriter.
-        """
         req = self.request
         resp = self.response
 
@@ -132,7 +98,6 @@ class HttpAdapter:
             writer.close()
             return
 
-        # CORS preflight
         if req.method == "OPTIONS":
             writer.write(resp.build_cors_preflight())
             await writer.drain()
@@ -148,21 +113,7 @@ class HttpAdapter:
         await writer.drain()
         writer.close()
 
-    # ------------------------------------------------------------------
-    # Hook dispatch helpers
-    # ------------------------------------------------------------------
-
     def _dispatch_hook(self, req, resp):
-        """Call a synchronous (or async) route hook and build the HTTP response.
-
-        Hook functions may return:
-          * ``bytes``                        — plain body
-          * ``(bytes, dict)``                — body + extra headers (e.g. Set-Cookie)
-
-        :param req: Parsed :class:`Request`.
-        :param resp: :class:`Response` instance.
-        :returns: Complete encoded HTTP response bytes.
-        """
         print("[HttpAdapter] Dispatching hook: {}".format(req.hook))
         try:
             if inspect.iscoroutinefunction(req.hook):
@@ -180,12 +131,6 @@ class HttpAdapter:
             return resp.build_notfound()
 
     async def _dispatch_hook_async(self, req, resp):
-        """Async version of :meth:`_dispatch_hook`.
-
-        :param req: Parsed :class:`Request`.
-        :param resp: :class:`Response` instance.
-        :returns: Complete encoded HTTP response bytes.
-        """
         print("[HttpAdapter] Async dispatching hook: {}".format(req.hook))
         try:
             if inspect.iscoroutinefunction(req.hook):
@@ -202,11 +147,6 @@ class HttpAdapter:
 
     @staticmethod
     def _unpack_hook_result(result):
-        """Unpack hook return value into ``(content_bytes, extra_headers)``.
-
-        :param result: Hook return value — ``bytes`` or ``(bytes, dict)``.
-        :returns: ``(bytes, dict | None)`` tuple.
-        """
         extra_headers = None
         if isinstance(result, tuple) and len(result) == 2:
             content, extra_headers = result
@@ -218,16 +158,7 @@ class HttpAdapter:
 
         return content, extra_headers
 
-    # ------------------------------------------------------------------
-    # Cookie helpers
-    # ------------------------------------------------------------------
-
     def extract_cookies(self, req, resp=None):
-        """Parse the ``Cookie`` header from *req* into a plain dict.
-
-        :param req: :class:`Request` object.
-        :returns: ``{name: value}`` dict.
-        """
         cookies = {}
         cookie_str = req.headers.get("cookie", "") if hasattr(req.headers, "get") else ""
         if cookie_str:
@@ -238,28 +169,11 @@ class HttpAdapter:
                     cookies[key.strip()] = value.strip()
         return cookies
 
-    # ------------------------------------------------------------------
-    # Proxy support
-    # ------------------------------------------------------------------
-
     def add_headers(self, request):
-        """Hook point for subclasses to inject custom request headers.
-
-        :param request: :class:`Request` object.
-        """
         pass
 
     def build_proxy_headers(self, proxy):
-        """Return a dict of headers to add when forwarding through *proxy*.
-
-        Builds a ``Proxy-Authorization: Basic <b64>`` header from
-        configured credentials.
-
-        :param proxy: Proxy URL string.
-        :returns: ``dict`` of header name → value pairs.
-        """
         headers = {}
-        # TODO: load real credentials from config / environment
         username, password = ("user1", "password")
         if username:
             token = base64.b64encode(

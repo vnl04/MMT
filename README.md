@@ -1,25 +1,48 @@
 # CO3093 / CO3094 — AsynapRous (Assignment 1)
 
-**Trường:** Đại học Bách Khoa TP.HCM (HCMUT) · Khoa Khoa học & Kỹ thuật Máy tính  
+**Trường:** Đại học Bách Khoa TP.HCM (HCMUT), Khoa Khoa học & Kỹ thuật Máy tính  
 
-Dự án triển khai **HTTP server không chặn (non-blocking)**, **xác thực HTTP** và **ứng dụng chat lai (client–server + P2P)** theo framework **AsynapRous** (Python, chủ yếu thư viện chuẩn `socket`).
+Dự án: **HTTP server không chặn (non-blocking)**, **xác thực HTTP**, **chat lai** (REST + TCP P2P) trên framework **AsynapRous** (Python, chủ yếu thư viện chuẩn `socket`).
+
+### Ghi chú phiên bản
+
+- Chuẩn hoá **`BASE_DIR`** trong `daemon/response.py` để **`www/`** và **`static/`** luôn resolve theo thư mục gốc repo (không phụ thuộc chỗ đứng khi chạy `python ...`).
+- Định tuyến **`/login` / `/login/`**; **`401`/`400`** và **`WWW-Authenticate`** cho `POST /login` khi cần; **`POST /logout`** hỗ trợ **`Cookie: session=`**; proxy: timeout **`recv`** backend và **`proxy_pass`** không trùng lặp không cần thiết khi round-robin.
+
+---
+
+## Git — clone và đẩy code
+
+Repo này bao gồm toàn bộ mã trong thư mục clone (đổi tên folder khi clone tùy bạn).
+
+```bash
+git clone <URL-repo-cua-ban>.git
+cd <ten-thu-muc-repo>
+git status
+```
+
+Đưa lên nhánh đang làm việc (ví dụ `main`):
+
+```bash
+git add -A
+git commit -m "Your message"
+git push origin main
+```
+
+File **`.gitignore`** đã bỏ qua `__pycache__/`, venv, file editor, log. Sau khi pull trên máy khác chỉ cần Python chuẩn, không có dependency `pip` bắt buộc (trừ thư viện chuẩn của Python).
 
 ---
 
 ## Yêu cầu môi trường
 
 - **Python 3** (khuyến nghị 3.10+)
-- Chạy từ **thư mục gốc** của repo này (để import `daemon`, `apps`, `chat` đúng).
-
-```bash
-cd CO3094-asynaprous
-```
+- Làm việc **trong thư mục gốc clone** của repo để entrypoint import `daemon`, `apps`, `chat` đúng.
 
 ---
 
-## Chạy nhanh — Webapp + giao diện chat
+## Chạy nhanh — Webapp + chat
 
-1. Khởi động server webapp (mặc định cổng **2026**):
+1. Khởi động webapp (mặc định cổng **2026**):
 
 ```bash
 python start_sampleapp.py
@@ -31,12 +54,12 @@ Tùy chỉnh:
 python start_sampleapp.py --server-ip 0.0.0.0 --server-port 2026
 ```
 
-2. Mở trình duyệt (nên dùng tab **ẩn danh** khi thử cookie/session):
+2. Trình duyệt (nên tab ẩn danh khi thử cookie):
 
-- Trang đăng nhập: `http://127.0.0.1:2026/login.html`
-- Trang chat: `http://127.0.0.1:2026/chat.html`
+- Đăng nhập: `http://127.0.0.1:2026/login.html`
+- Chat: `http://127.0.0.1:2026/chat.html`
 
-3. **Tài khoản demo** (xem `apps/sampleapp.py`, `USER_DB`):
+3. **Tài khoản demo** (`apps/sampleapp.py`, `USER_DB`):
 
 | Username | Password   |
 |----------|------------|
@@ -46,21 +69,21 @@ python start_sampleapp.py --server-ip 0.0.0.0 --server-port 2026
 | bob      | bob123     |
 | guest    | guest      |
 
-Sau khi đăng nhập, cần **đăng ký cổng lắng nghe P2P** trên giao diện chat (ví dụ `7001`, `7002` cho hai người dùng khác nhau) để `/send-peer` có thể mở TCP trực tiếp tới peer.
+Sau khi đăng nhập cần **đăng ký cổng P2P** trên giao diện (ví dụ `7001`, `7002` cho hai user) để `/send-peer` kết nối TCP được.
 
 ---
 
-## Các tiến trình khác (theo kiến trúc đề bài)
+## Các script khác
 
-| Script | Mô tả | Cổng mặc định (tham khảo) |
-|--------|--------|---------------------------|
-| `start_sampleapp.py` | Webapp AsynapRous + REST chat | **2026** |
-| `start_backend.py` | Backend HTTP đơn giản | **9000** |
-| `start_proxy.py` | Reverse proxy (đọc `config/proxy.conf`) | **8080** |
-| `start_tracker.py` | Tracker P2P (giao thức dòng lệnh TCP) | **6000** |
-| `start_peer.py` | Peer CLI: đăng ký tracker + chat P2P | peer port tùy chọn |
+| Script | Mô tả | Cổng tham khảo |
+|--------|--------|----------------|
+| `start_sampleapp.py` | Webapp + REST chat | **2026** |
+| `start_backend.py` | Backend đơn giản (tutorial) | **9000** |
+| `start_proxy.py` | Reverse proxy (`config/proxy.conf`) | **8080** |
+| `start_tracker.py` | Tracker P2P | **6000** |
+| `start_peer.py` | Peer CLI + tracker | tùy chọn |
 
-Ví dụ demo **tracker + peer** (hai terminal):
+Demo tracker:
 
 ```bash
 python start_tracker.py
@@ -69,54 +92,58 @@ python start_peer.py --username alice --peer-port 7001
 
 ---
 
-## Bố cục mã nguồn (rút gọn)
+## Bố cục mã nguồn
 
 | Thư mục / file | Nội dung |
 |----------------|----------|
-| `daemon/` | `backend.py`, `httpadapter.py`, `request.py`, `response.py`, `asynaprous.py` — lõi HTTP |
-| `apps/sampleapp.py` | REST: login, peer registry, channel, P2P (`_direct_send`), messages |
-| `chat/` | Tracker + peer cho demo P2P dòng lệnh |
-| `www/` | `login.html`, `chat.html`, … |
-| `static/` | CSS, JS, hình |
+| `daemon/` | `backend.py`, `httpadapter.py`, `request.py`, `response.py`, `asynaprous.py`, `proxy.py` |
+| `apps/sampleapp.py` | REST: login, peer registry, kênh, P2P, messages |
+| `chat/` | Tracker + peer dòng lệnh |
+| `www/` | `login.html`, `chat.html`, `index.html` |
+| `static/` | CSS và tài nguyên tĩnh |
 | `config/proxy.conf` | Cấu hình proxy |
 | `docs/Giai_thich_Yeu_cau_BTL.md` | Giải thích yêu cầu (tiếng Việt) |
 
 ---
 
-## Non-blocking (mục 2.1 đề)
+## Non-blocking (`daemon/backend.py`)
 
-Trong `daemon/backend.py`, biến toàn cục **`mode_async`** chọn một trong:
-
-- `"threading"` — mỗi kết nối một luồng (mặc định trong bản hiện tại)
-- `"callback"` — vòng lặp `selectors` + callback
-- `"coroutine"` — `asyncio` (StreamReader / StreamWriter)
-
-Đổi giá trị rồi chạy lại `start_sampleapp.py` để demo cơ chế tương ứng.
+Biến **`mode_async`**: `"threading"` | `"callback"` | `"coroutine"`. Đổi rồi chạy lại `start_sampleapp.py`.
 
 ---
 
-## API REST chính (mục 2.3 — đối chiếu đề)
+## API REST chính
 
-Các handler được khai báo trong `apps/sampleapp.py` (đường dẫn không bắt buộc dấu `/` cuối):
+Xem chi tiết trong `apps/sampleapp.py`:
 
-- `POST /login` — đăng nhập, cookie `session=` + token JSON
-- `POST /logout` — hủy phiên (client nên gửi `token` trong body như `www/chat.html`)
-- `POST /submit-info` — đăng ký IP/port lắng nghe của peer
-- `GET /get-list` — danh sách peer đang hoạt động
-- `POST /add-list` — tham gia kênh
-- `POST /connect-peer` — thử kết nối TCP trực tiếp (probe `PING`)
-- `POST /send-peer`, `POST /broadcast-peer` — tin nhắn P2P qua TCP
-- `GET|POST /messages` — đọc log tin nhắn đã lưu theo kênh (UI dùng `POST` kèm body `channel`)
-- `POST /ping` — heartbeat giữ peer trong registry
+- `POST /login`, `POST /logout`, `POST /submit-info`, `GET /get-list`, `POST /add-list`
+- `POST /connect-peer`, `POST /send-peer`, `POST /broadcast-peer`
+- `GET|POST /messages`, `POST /ping`
+
+---
+
+## Kiểm thử
+
+**1.** Cú pháp Python (không cần bật server):
+
+```bash
+python -m compileall apps chat daemon start_sampleapp.py start_proxy.py -q
+```
+
+**2.** Chạy `python start_sampleapp.py`, sau đó kiểm tra trên browser (`login.html`, `chat.html`).
+
+**3.** Tracker / peer / proxy — theo bảng các script phía trên.
+
+**PowerShell (Windows):** không dùng `&&`; chạy từng lệnh hoặc `Set-Location ...; python ...`.
 
 ---
 
 ## Giấy phép & học thuật
 
-Mã nguồn gốc thuộc khóa **CO3093/CO3094** (HCMUT), dùng cho mục đích học tập theo license kèm theo trong đề coursework. Kiểm tra file **LICENSE** (nếu có trong gói) trước khi tái sử dụng ngoài lớp.
+Mã nguồn khóa **CO3093/CO3094** (HCMUT), học tập theo đề và license coursework. Kiểm tra **LICENSE** nếu có trước khi tái sử dụng ngoài lớp.
 
 ---
 
-## Báo cáo / nộp bài
+## Nộp bài
 
-Nén **cả thư mục mã nguồn** kèm báo cáo theo hướng dẫn LMS (tên file dạng `assignment_STUDENTID.zip`). Chi tiết chấm điểm và rubric xem đề Assignment 1 trên portal môn học.
+Thu gọn/ghi zip theo hướng dẫn LMS (vd. `assignment_STUDENTID.zip`). Chi tiết chấm xem Assignment 1 trên portal.

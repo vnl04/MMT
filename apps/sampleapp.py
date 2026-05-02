@@ -16,12 +16,21 @@
 app.sampleapp
 ~~~~~~~~~~~~~~~~~
 
-Complete RESTful web application implementing Assignment 1 requirements:
+Complete RESTful web application implementing Assignment 1 requirements.
+
+Merged fixes (from ``files/`` patch set + RFC tidy-ups):
+    * ``AsynapRous.route`` returns the handler unchanged (correct async introspection).
+    * Request routing normalises trailing slashes (``/login/`` ≡ ``/login``).
+    * ``HttpAdapter``: optional ``raw=`` pre-read buffer; asyncio mode uses ``self.routes``.
+    * Proxy: recv timeout + deduped ``proxy_pass`` in ``start_proxy.py``.
+    * Login failures return ``401`` JSON + ``WWW-Authenticate``; missing fields → ``400``.
+    * ``/logout`` accepts ``Cookie: session=`` as well as body / Bearer token.
+    * ``/messages`` registered once for GET and POST.
 
   Section 2.2 — Authentication (RFC 2617 / RFC 7235 / RFC 6265)
     * Basic auth via ``Authorization: Basic <b64>`` header.
     * Session token issued on login; stored in ``Set-Cookie: session=<token>``.
-    * Server challenges unauthenticated clients with ``WWW-Authenticate``.
+    * Failed login responds with ``401`` + ``WWW-Authenticate`` (RFC 7235).
 
   Section 2.3 — Hybrid P2P Chat
     Initialization phase (Client-Server):
@@ -181,6 +190,20 @@ def _get_username_from_session(headers):
     return None
 
 
+def _session_token_from_cookie(headers):
+    """Return the opaque ``session`` cookie value if present (RFC 6265)."""
+    if not headers or not hasattr(headers, "get"):
+        return ""
+    cookie_str = headers.get("cookie", "")
+    if not cookie_str:
+        return ""
+    for pair in cookie_str.split(";"):
+        pair = pair.strip()
+        if pair.lower().startswith("session="):
+            return pair.split("=", 1)[1].strip()
+    return ""
+
+
 def _remove_stale_peers():
     """Remove peers that have not sent a heartbeat within ``PEER_TIMEOUT``."""
     now = time.time()
@@ -239,16 +262,22 @@ def login(headers="", body=""):
 
     if not username or not password:
         resp = {"status": "error", "message": "Missing username or password"}
-        return json.dumps(resp).encode("utf-8")
+        return (
+            json.dumps(resp).encode("utf-8"),
+            {"__status": "400", "__reason": "Bad Request"},
+        )
 
     stored = USER_DB.get(username)
     if stored is None or _hash_password(password) != stored:
         print("[SampleApp] Login failed for: {}".format(username))
         resp = {"status": "error", "message": "Invalid credentials"}
-        # RFC 7235 §4.1 — include WWW-Authenticate to signal auth mechanism
         return (
             json.dumps(resp).encode("utf-8"),
-            {"WWW-Authenticate": 'Basic realm="AsynapRous"'},
+            {
+                "WWW-Authenticate": 'Basic realm="AsynapRous"',
+                "__status": "401",
+                "__reason": "Unauthorized",
+            },
         )
 
     token = _make_token(username)
@@ -289,6 +318,9 @@ def logout(headers="", body=""):
         auth = headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
+
+    if not token:
+        token = _session_token_from_cookie(headers)
 
     if token in SESSIONS:
         user = SESSIONS.pop(token)
@@ -587,8 +619,7 @@ def broadcast_peer(headers="", body=""):
 # Utility endpoints
 # ===========================================================================
 
-@app.route("/messages", methods=["GET"])
-@app.route("/messages", methods=["POST"])
+@app.route("/messages", methods=["GET", "POST"])
 def get_messages(headers="", body=""):
     """Return stored messages for a channel (polling endpoint).
 

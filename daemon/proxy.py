@@ -36,6 +36,9 @@ from .dictionary import CaseInsensitiveDict
 _rr_counters = {}
 _rr_lock = threading.Lock()
 
+# Backend read timeout (avoid hanging recv if connection stays half-open).
+_BACKEND_RECV_TIMEOUT = 5.0
+
 
 # ---------------------------------------------------------------------------
 # Backend forwarding
@@ -44,18 +47,25 @@ _rr_lock = threading.Lock()
 def forward_request(host, port, request):
     """Open a TCP connection to *host*:*port*, send *request*, return the reply.
 
+    Uses ``settimeout`` on the backend socket so the recv loop cannot block
+    indefinitely (e.g. HTTP keep-alive idle socket).
+
     :param host: Backend IP/hostname string.
     :param port: Backend port integer.
     :param request: Raw HTTP request string to forward.
     :returns: Raw HTTP response bytes from the backend.
     """
     backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    backend.settimeout(_BACKEND_RECV_TIMEOUT)
     try:
         backend.connect((host, port))
         backend.sendall(request.encode("utf-8", errors="replace"))
         response = b""
         while True:
-            chunk = backend.recv(4096)
+            try:
+                chunk = backend.recv(4096)
+            except socket.timeout:
+                break
             if not chunk:
                 break
             response += chunk
