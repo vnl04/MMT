@@ -7,44 +7,46 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: Arial, sans-serif;
-      background: #1e1e2e;
-      color: #cdd6f4;
+      background: #f3f7fc;
+      color: #24486e;
       display: flex;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
     }
     .card {
-      background: #313244;
+      background: #ffffff;
       padding: 36px 40px;
-      border-radius: 8px;
+      border-radius: 10px;
       width: 340px;
+      border: 1px solid #d2e3f3;
+      box-shadow: 0 8px 24px rgba(47, 128, 209, 0.12);
     }
-    h1 { font-size: 22px; margin-bottom: 6px; color: #cba6f7; }
-    p.sub { font-size: 12px; color: #a6adc8; margin-bottom: 24px; }
-    label { font-size: 13px; display: block; margin-bottom: 4px; color: #a6e3a1; }
+    h1 { font-size: 22px; margin-bottom: 6px; color: #2f80d1; }
+    p.sub { font-size: 12px; color: #6c89a8; margin-bottom: 24px; }
+    label { font-size: 13px; display: block; margin-bottom: 4px; color: #3978b7; }
     input[type=text], input[type=password] {
       width: 100%; padding: 9px 12px;
-      background: #1e1e2e; border: 1px solid #45475a;
-      border-radius: 4px; color: #cdd6f4; font-size: 14px;
+      background: #ffffff; border: 1px solid #bfd4e8;
+      border-radius: 6px; color: #24486e; font-size: 14px;
       margin-bottom: 16px;
     }
-    input:focus { outline: none; border-color: #cba6f7; }
+    input:focus { outline: none; border-color: #4e95db; }
     button {
       width: 100%; padding: 10px;
-      background: #cba6f7; color: #1e1e2e;
+      background: #4e95db; color: #ffffff;
       border: none; border-radius: 4px;
       font-size: 15px; font-weight: bold;
       cursor: pointer;
     }
-    button:hover { background: #b4befe; }
+    button:hover { background: #3e84c9; }
     #msg {
       margin-top: 14px; font-size: 13px;
       text-align: center; min-height: 18px;
     }
-    #msg.ok  { color: #a6e3a1; }
-    #msg.err { color: #f38ba8; }
-    .hint { margin-top: 20px; font-size: 12px; color: #6c7086; text-align: center; }
+    #msg.ok  { color: #2f80d1; }
+    #msg.err { color: #d9534f; }
+    .hint { margin-top: 20px; font-size: 12px; color: #6c89a8; text-align: center; }
   </style>
 </head>
 <body>
