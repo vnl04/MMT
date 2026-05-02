@@ -113,6 +113,7 @@ _channel_lock = threading.Lock()
 MESSAGES = {"general": []}
 _msg_lock = threading.Lock()
 _msg_seq = 0
+MESSAGE_IDS = set()
 
 # ---------------------------------------------------------------------------
 # Integrated P2P listeners {port: thread}
@@ -245,14 +246,21 @@ def _direct_send(peer_ip, peer_port, payload_str):
 
 
 def _store_message(channel, entry):
-    """Append one message and stamp it with a monotonically increasing seq."""
+    """Append one message if not duplicated; stamp with monotonically increasing seq."""
     global _msg_seq
     with _msg_lock:
+        mid = entry.get("id", "")
+        if mid and mid in MESSAGE_IDS:
+            return False
+
         if channel not in MESSAGES:
             MESSAGES[channel] = []
         _msg_seq += 1
         entry["seq"] = _msg_seq
+        if mid:
+            MESSAGE_IDS.add(mid)
         MESSAGES[channel].append(entry)
+    return True
 
 
 def _handle_p2p_connection(conn, addr):
@@ -267,9 +275,17 @@ def _handle_p2p_connection(conn, addr):
                 text = msg.get("text", "")
                 channel = msg.get("channel", "general")
                 ts = msg.get("time", time.strftime("%H:%M:%S"))
-                entry = {"from": sender, "text": text, "time": ts, "channel": channel}
-                _store_message(channel, entry)
-                print("[P2PListener] Message from {} on {}: {}".format(sender, channel, text))
+                entry = {
+                    "id": msg.get("id", ""),
+                    "from": sender,
+                    "text": text,
+                    "time": ts,
+                    "channel": channel,
+                }
+                if _store_message(channel, entry):
+                    print("[P2PListener] Message from {} on {}: {}".format(sender, channel, text))
+                else:
+                    print("[P2PListener] Duplicate message dropped ({})".format(entry.get("id", "")))
             except json.JSONDecodeError:
                 print("[P2PListener] Non-JSON payload from {}: {}".format(addr, data))
         conn.sendall(b"ACK\n")
@@ -613,7 +629,8 @@ def send_peer(headers="", body=""):
 
     # Store message server-side regardless of P2P delivery success
     timestamp = time.strftime("%H:%M:%S")
-    entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
+    msg_id = "{}:{}:{}:{}:{}".format(sender, target, channel, timestamp, os.urandom(4).hex())
+    entry = {"id": msg_id, "from": sender, "text": message, "time": timestamp, "channel": channel}
     _store_message(channel, entry)
 
     _remove_stale_peers()
@@ -629,7 +646,7 @@ def send_peer(headers="", body=""):
         return json.dumps(resp).encode("utf-8")
 
     # P2P direct send — bypass this server
-    payload = json.dumps({"from": sender, "text": message,
+    payload = json.dumps({"id": msg_id, "from": sender, "text": message,
                           "time": timestamp, "channel": channel})
     ok, reply = _direct_send(peer_info["ip"], peer_info["port"], payload)
 
@@ -672,14 +689,15 @@ def broadcast_peer(headers="", body=""):
         return json.dumps({"status": "error", "message": "Missing message"}).encode("utf-8")
 
     timestamp = time.strftime("%H:%M:%S")
-    entry = {"from": sender, "text": message, "time": timestamp, "channel": channel}
+    msg_id = "{}:broadcast:{}:{}:{}".format(sender, channel, timestamp, os.urandom(4).hex())
+    entry = {"id": msg_id, "from": sender, "text": message, "time": timestamp, "channel": channel}
     _store_message(channel, entry)
 
     _remove_stale_peers()
     with _registry_lock:
         peers_snapshot = dict(PEER_REGISTRY)
 
-    payload = json.dumps({"from": sender, "text": message,
+    payload = json.dumps({"id": msg_id, "from": sender, "text": message,
                           "time": timestamp, "channel": channel})
     results = {}
 
