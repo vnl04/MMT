@@ -107,7 +107,8 @@ class HttpAdapter:
         if req.hook:
             response = await self._dispatch_hook_async(req, resp)
         else:
-            response = resp.build_response(req)
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, resp.build_response, req)
 
         writer.write(response)
         await writer.drain()

@@ -75,14 +75,6 @@ def _accept_callback(server_sock, ip, port, routes, sel):
 # Coroutine / asyncio mode
 # ---------------------------------------------------------------------------
 
-async def _handle_client_coroutine(reader, writer):
-    """Async coroutine handler — reads, processes, writes, closes."""
-    addr = writer.get_extra_info("peername")
-    print("[Backend] [coroutine] accepted connection from {}".format(addr))
-    daemon = HttpAdapter(None, None, None, addr, {})
-    await daemon.handle_client_coroutine(reader, writer)
-
-
 async def _async_server(ip, port, routes):
     """Start an asyncio server. routes are stored on the daemon module-level
     so coroutine handlers can reach them."""

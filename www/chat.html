@@ -189,8 +189,6 @@
     }
     #btn-send { background: #4e95db; color: #ffffff; }
     #btn-send:hover { background: #3e84c9; }
-    #btn-broadcast { background: #77afe4; color: #ffffff; }
-    #btn-broadcast:hover { background: #5d9edc; }
 
     #status-bar {
       padding: 4px 16px;
@@ -232,17 +230,21 @@
   <div id="chat-area">
     <div id="channel-bar">
       <span># <span id="channel-label">general</span></span>
-      <span id="notification" onclick="scrollToBottom()">New messages ↓</span>
+  <button onclick="switchToGeneral()"
+    style="font-size:11px; padding:3px 10px; background:#2f80d1;
+          color:#fff; border:none; border-radius:4px; cursor:pointer;">
+    # general
+  </button>
+  <span id="notification" onclick="scrollToBottom()">New messages ↓</span>
     </div>
 
     <div id="messages"></div>
 
     <div id="input-bar">
       <input id="msg-input" type="text"
-             placeholder="Type a message… (Enter to send, select peer first)"
-             autocomplete="off">
+            placeholder="Type a message… (Enter to send, select peer first)"
+            autocomplete="off">
       <button id="btn-send" onclick="doSend()">Send</button>
-      <button id="btn-broadcast" onclick="doBroadcast()">Broadcast All</button>
     </div>
 
     <div id="status-bar">Ready</div>
@@ -258,6 +260,7 @@ const token    = sessionStorage.getItem('token')    || '';
 const username = sessionStorage.getItem('username') || 'guest';
 let selectedPeer  = null;
 let channel       = 'general';
+let privateChannel = null;
 let lastSeq       = 0;
 let renderedCount = 0;
 let isLoadingMessages = false;
@@ -320,16 +323,38 @@ async function loadPeers() {
       li.appendChild(dot);
       li.appendChild(name);
       li.onclick = () => {
-        selectedPeer = p.username;
-        document.querySelectorAll('#peer-list li').forEach(l => l.classList.remove('active'));
-        li.classList.add('active');
-        setStatus('Target → ' + p.username + ' (' + p.ip + ':' + p.port + ')');
+      selectedPeer   = p.username;
+  const pair     = [username, p.username].sort().join('__');
+  privateChannel = pair;
+  channel        = pair;
+  renderedCount  = 0;
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('channel-label').textContent = '@ ' + p.username;
+  document.querySelectorAll('#peer-list li').forEach(l => l.classList.remove('active'));
+  li.classList.add('active');
+  setStatus('Direct chat with ' + p.username);
+  loadMessages();
       };
       ul.appendChild(li);
     });
   } catch (e) {
     setStatus('Peer list error: ' + e.message);
   }
+}
+
+// ----------------------------------------------------------------
+// Switch to General channel
+// ----------------------------------------------------------------
+function switchToGeneral() {   // ← ĐẶT Ở ĐÂY
+  selectedPeer   = null;
+  privateChannel = null;
+  channel        = 'general';
+  renderedCount  = 0;
+    document.getElementById('messages').innerHTML = '';
+    document.getElementById('channel-label').textContent = 'general';
+    document.querySelectorAll('#peer-list li').forEach(l => l.classList.remove('active'));
+      setStatus('Viewing #general');
+      loadMessages();
 }
 
 // ----------------------------------------------------------------
@@ -440,18 +465,30 @@ async function doSend() {
   const text = document.getElementById('msg-input').value.trim();
   if (!text) return;
 
+  document.getElementById('msg-input').value = '';
+  
   if (!selectedPeer) {
-    setStatus('Click a peer in the list to select a target, then send.');
+    try {
+      const r = await fetch('/broadcast-peer', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ from: username, message: text, channel: 'general' })
+      });
+      const d = await r.json();
+      const count = Object.values(d.results || {}).filter(v => v).length;
+      setStatus('Sent to #general — delivered to ' + count + ' peer(s).');
+      await loadMessages();
+    } catch (e) {
+      setStatus('Send error: ' + e.message);
+    }
     return;
   }
-
-  document.getElementById('msg-input').value = '';
 
   try {
     const r = await fetch('/send-peer', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ from: username, target: selectedPeer, message: text, channel })
+      body: JSON.stringify({ from: username, target: selectedPeer, message: text, channel: privateChannel })
     });
     const d = await r.json();
     const label = d.delivered ? 'delivered directly ✓' : 'stored (peer offline)';
@@ -459,30 +496,6 @@ async function doSend() {
     await loadMessages();
   } catch (e) {
     setStatus('Send error: ' + e.message);
-  }
-}
-
-// ----------------------------------------------------------------
-// Broadcast — POST /broadcast-peer  (P2P broadcast)
-// ----------------------------------------------------------------
-async function doBroadcast() {
-  const text = document.getElementById('msg-input').value.trim();
-  if (!text) { setStatus('Type a message first.'); return; }
-
-  document.getElementById('msg-input').value = '';
-
-  try {
-    const r = await fetch('/broadcast-peer', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ from: username, message: text, channel })
-    });
-    const d = await r.json();
-    const count = Object.values(d.results || {}).filter(v => v).length;
-    setStatus('Broadcast sent — delivered to ' + count + ' peer(s).');
-    await loadMessages();
-  } catch (e) {
-    setStatus('Broadcast error: ' + e.message);
   }
 }
 
